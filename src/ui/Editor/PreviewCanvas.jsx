@@ -399,16 +399,10 @@ export default function PreviewCanvas(){
       className="preview"
       style={{
         position: "relative",
-        width: "100vw",
-
-        // 🔥 DYNAMIC HEIGHT (THIS IS THE FIX)
-        height: isCategoryOpen
-          ? "calc(100dvh - 180px)" // more space when open
-          : "calc(100dvh - 110px)", // normal
-
+        flex: 1,              // 🔥 THIS FIXES EVERYTHING
+        width: "100%",
         overflow: "hidden",
-        background: "black",
-        transition: "height 0.25s ease"
+        background: "black"
       }}
     >
 
