@@ -38,10 +38,9 @@ export function recordCanvasVideo(canvas, media, options = {}) {
   } = options
 
   const canvasStream = canvas.captureStream(fps)
-
   let finalStream = canvasStream
 
-  // 🎧 ADD AUDIO (if available)
+  // 🎧 AUDIO
   if (withAudio && media && media.captureStream) {
     try {
       const audioStream = media.captureStream()
@@ -52,75 +51,77 @@ export function recordCanvasVideo(canvas, media, options = {}) {
           ...canvasStream.getVideoTracks(),
           ...audioTracks
         ])
-        
       }
     } catch (e) {
       console.warn("⚠️ audio capture failed", e)
     }
   }
 
-  // 🎥 FORMAT SELECTION
+  // 🎥 FORMAT
   let mimeType = ""
 
   if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
     mimeType = "video/webm;codecs=vp9"
   } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
     mimeType = "video/webm;codecs=vp8"
-  } else if (MediaRecorder.isTypeSupported("video/webm")) {
-    mimeType = "video/webm"
-  } else if (MediaRecorder.isTypeSupported("video/mp4")) {
-    mimeType = "video/mp4" // ⚠️ limited support
   } else {
-    alert("❌ No supported format")
-    return
+    mimeType = "video/webm"
   }
 
   const recorder = new MediaRecorder(finalStream, {
     mimeType,
-    videoBitsPerSecond: 8_000_000
+    videoBitsPerSecond: 3_000_000 // ✅ LOWER = faster + stable
   })
 
-  const chunks = []
+  let chunks = []
   let startTime = null
 
+  // ✅ STREAM chunks continuously (CRITICAL FIX)
   recorder.ondataavailable = (e) => {
-    if (e.data.size > 0) chunks.push(e.data)
+    console.log("📦 chunk:", e.data.size)
+
+    if (e.data.size > 0) {
+      chunks.push(e.data)
+    }
   }
 
   recorder.onstart = () => {
+    console.log("🟢 recorder STARTED")
     startTime = Date.now()
     onStart()
-    
   }
 
   recorder.onstop = () => {
+
+    console.log("🔴 recorder STOPPED")
+    console.log("📦 total chunks:", chunks.length)
+
     const blob = new Blob(chunks, { type: mimeType })
     const url = URL.createObjectURL(blob)
 
     const a = document.createElement("a")
     a.href = url
-    a.download = mimeType.includes("mp4")
-      ? "face-edit.mp4"
-      : "face-edit.webm"
-
+    a.download = "face-edit.webm"
     a.click()
-    URL.revokeObjectURL(url)
 
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+
+    chunks = [] // ✅ free memory
     onStop()
-    
   }
 
-  recorder.start()
+  // ✅ KEY FIX: timeslice = flush every 1 second
+  recorder.start(1000)
 
-  // 🎯 EXACT DURATION (SYNC WITH VIDEO)
+  // 🎯 PROGRESS SYNC
   if (media && media.tagName === "VIDEO") {
     const duration = media.duration
 
     if (!isNaN(duration)) {
       const interval = setInterval(() => {
         const current = media.currentTime
-
         const progress = current / duration
+
         onProgress(progress)
 
         if (progress >= 0.999) {

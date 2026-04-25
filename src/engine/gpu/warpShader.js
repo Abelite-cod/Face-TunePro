@@ -35,9 +35,8 @@ float influence(vec2 uv, vec2 point) {
 
 void main() {
   vec2 uv = v_uv;
-
-  uv.x = 1.0 - uv.x;
-  uv.y = 1.0 - uv.y;
+  uv.y = uv.y; 
+  uv.x = uv.x;  
 
   vec2 offset = vec2(0.0);
 

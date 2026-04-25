@@ -36,6 +36,15 @@ align-items:center;
 justify-content:center;
 }
 
+@media (min-width: 768px) {
+  .uploadBar {
+    bottom: 20px;
+    left: 20px;
+    transform: none;
+    flex-direction: column;
+  }
+}
+
 /* viewport */
 
 .viewport{
@@ -224,13 +233,9 @@ color:white;
 color:white;
 }
 
-/* done cancel */
 
-.doneCancel{
-display:flex;
-justify-content:center;
-gap:10px;
-}
+
+
 
 .done{
 background:white;

@@ -1,7 +1,7 @@
 import SliderBar from "./SliderBar"
 import SubTabs from "./SubTabs"
 import CategoryTabs from "./CategoryTabs"
-import DoneCancel from "./DoneCancel"
+
 
 export default function BottomPanel(){
   return (
@@ -12,8 +12,6 @@ export default function BottomPanel(){
       <SubTabs />
 
       <CategoryTabs />
-
-      <DoneCancel />
 
     </div>
   )

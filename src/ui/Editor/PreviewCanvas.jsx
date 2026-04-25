@@ -26,6 +26,7 @@ export default function PreviewCanvas(){
   const startRef = useRef({x:0,y:0})
   const startValueRef = useRef(0)
 
+  const cancelledRef = useRef(false)
   const recorderRef = useRef(null)
   const [recording, setRecording] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -35,9 +36,7 @@ export default function PreviewCanvas(){
   const forceRenderFrame = () => {
     return new Promise((resolve) => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          resolve()
-        })
+        setTimeout(resolve, 16) // ✅ allow GPU to settle
       })
     })
   }
@@ -217,13 +216,12 @@ export default function PreviewCanvas(){
     }
     const vid = document.createElement("video")
     vid.src = URL.createObjectURL(file)
-    vid.loop = true
+    vid.loop = false
     vid.muted = true
     vid.playsInline = true
     vid.autoplay = true
 
     vid.onloadeddata = () => {
-      
       vid.play()
       mediaRef.current = vid
       landmarksRef.current = null
@@ -243,53 +241,59 @@ export default function PreviewCanvas(){
   /* ---------- DOWNLOAD ---------- */
 
   const download = async () => {
-    if (recording) {
-      console.warn("⚠️ Already recording — blocked")
-      return
-    }
+    if (recording) return
+
     const canvas = canvasRef.current
     const media = mediaRef.current
 
-    if (!canvas || !media) {
-      console.warn("❌ nothing to export")
-      return
-    }
+    if (!canvas || !media) return
 
     setExportStatus("preparing")
 
-    // ✅ FORCE CLEAN FRAME
     await forceRenderFrame()
 
-    
-    // 🎬 VIDEO EXPORT
     if (media.tagName === "VIDEO" && !media.srcObject) {
+
+      const wasLooping = media.loop
+      media.loop = false
+
+      media.currentTime = 0
+      await media.play()
+      await forceRenderFrame()
 
       recorderRef.current = recordCanvasVideo(canvas, media, {
         withAudio: true,
 
         onStart: () => {
+          console.log("🎬 RECORD START")
           setRecording(true)
           setExportStatus("recording")
         },
 
         onProgress: (p) => {
-          const percent = Math.min(100, Math.round(p * 100))
-          setProgress(percent)
+          setProgress(Math.round(p * 100))
         },
 
         onStop: () => {
-          setRecording(true)
-          setProgress(0)
-          setExportStatus("done")
+          console.log("🛑 RECORD STOP")
 
+          media.loop = wasLooping
+          setRecording(false)
+          setProgress(0)
+
+          if (cancelledRef.current) {
+            cancelledRef.current = false
+            setExportStatus(null)
+            return
+          }
+
+          setExportStatus("done")
           setTimeout(() => setExportStatus(null), 1500)
         }
       })
 
     } else {
-      // 🖼 IMAGE EXPORT
       downloadImage(canvas)
-
       setExportStatus("done")
       setTimeout(() => setExportStatus(null), 1200)
     }
@@ -381,6 +385,15 @@ export default function PreviewCanvas(){
 
   const onTouchEnd = ()=> onUp()
   const isCategoryOpen = !!state.category
+  
+  useEffect(() => {
+    console.log("📦 exportStatus:", exportStatus)
+  }, [exportStatus])
+
+  useEffect(() => {
+    console.log("🎥 recording:", recording)
+  }, [recording])
+  
   return (
     <div
       className="preview"
@@ -513,9 +526,22 @@ export default function PreviewCanvas(){
           </button>
 
           {/* Cancel */}
-          {recording && (
+          {(recording || exportStatus === "preparing") && (
             <button
-              onClick={() => recorderRef.current?.stop?.()}
+              onClick={() => {
+                console.log("❌ CANCEL CLICKED")
+                console.log("recorder:", recorderRef.current)
+                console.log("state:", recorderRef.current?.state)
+                cancelledRef.current = true
+
+                if (recorderRef.current && recorderRef.current.state !== "inactive") {
+                  recorderRef.current.stop()
+                }
+
+                if (exportStatus === "preparing") {
+                  setExportStatus(null)
+                }
+              }}
               style={btnStyle}
             >
               Cancel
@@ -575,40 +601,41 @@ export default function PreviewCanvas(){
             alignItems: "center",
             justifyContent: "center",
             color: "white",
-            zIndex: 20
+            zIndex: 20,
+            pointerEvents: "none"
           }}
         >
-          <div style={{ fontSize: "16px", marginBottom: "10px" }}>
-            {exportStatus === "preparing" && "Preparing file..."}
-            {exportStatus === "recording" && "Recording video"}
-            {exportStatus === "done" && "Saved successfully"}
-          </div>
+          <div style={{ pointerEvents: "auto", textAlign: "center" }}>
+            
+            <div style={{ fontSize: "16px", marginBottom: "10px" }}>
+              {exportStatus === "preparing" && "Preparing file..."}
+              {exportStatus === "recording" && "Recording video"}
+              {exportStatus === "done" && "Saved successfully"}
+            </div>
 
-          {exportStatus === "recording" && (
-            <>
-              <div
-                style={{
+            {exportStatus === "recording" && (
+              <>
+                <div style={{
                   width: "200px",
                   height: "6px",
                   background: "rgba(255,255,255,0.2)",
                   borderRadius: "10px",
                   overflow: "hidden"
-                }}
-              >
-                <div
-                  style={{
+                }}>
+                  <div style={{
                     width: `${progress}%`,
                     height: "100%",
                     background: "white"
-                  }}
-                />
-              </div>
+                  }} />
+                </div>
 
-              <div style={{ marginTop: "6px", fontSize: "12px" }}>
-                {progress}%
-              </div>
-            </>
-          )}
+                <div style={{ marginTop: "6px", fontSize: "12px" }}>
+                  {progress}%
+                </div>
+              </>
+            )}
+
+          </div>
         </div>
       )}
 

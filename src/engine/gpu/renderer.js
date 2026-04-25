@@ -74,7 +74,7 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
   gl.uniform1f(uGrayscaleLoc, controls.grayscale || 0)
   gl.uniform1f(uWarmthLoc, controls.warmth || 0)
 
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
 
   gl.activeTexture(gl.TEXTURE0)
   gl.bindTexture(gl.TEXTURE_2D, texture)
@@ -91,7 +91,7 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
   gl.uniform1i(uTextureLoc, 0)
 
   if (landmarks && modified) {
-
+    
     const indices = [
 
       // EYES
@@ -111,8 +111,12 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
       377,400,378,379,365,397,
 
       // EYEBROWS
+      // EYEBROWS (BOOSTED FOR VISIBILITY)
       70,63,105,66,107,55,65,52,53,46,193,189,
-      336,296,334,293,300,285,295,282,283,276,417,413
+      70,63,105,66,107,55,65,52,53,46,193,189, // duplicate left
+
+      336,296,334,293,300,285,295,282,283,276,417,413,
+      336,296,334,293,300,285,295,282,283,276,417,413, // duplicate right
     ]
 
     const pick = (points) => {
@@ -124,8 +128,8 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
         const w = media.videoWidth || media.naturalWidth
         const h = media.videoHeight || media.naturalHeight
 
-        arr.push(1.0 - p.x / w)
-        arr.push(p.y / h)
+        arr.push(1.0 - (p.x / w))
+        arr.push(1.0 - (p.y / h))
       }
 
       return new Float32Array(arr)
@@ -133,6 +137,9 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
 
     gl.uniform2fv(uOriginalLoc, pick(landmarks))
     gl.uniform2fv(uModifiedLoc, pick(modified))
+
+  
+
   }
 
   const posLoc = gl.getAttribLocation(program, "a_position")
