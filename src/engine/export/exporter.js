@@ -1,4 +1,5 @@
 // /src/engine/export/exporter.js
+import { uploadToServer } from "./uploadToServer"
 
 export function downloadImage(canvas) {
   if (!canvas) {
@@ -97,20 +98,19 @@ export function recordCanvasVideo(canvas, media, options = {}) {
     onStart()
   }
 
-  recorder.onstop = () => {
+  recorder.onstop = async () => {
     try {
       const blob = new Blob(chunks, { type: mimeType })
 
-      const url = URL.createObjectURL(blob)
+      console.log("⬆️ sending to server...", blob.size)
 
-      const ext = mimeType.includes("mp4") ? "mp4" : "webm"
+      onProgress(1)
 
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `face-edit.${ext}`
-      a.click()
-
-      setTimeout(() => URL.revokeObjectURL(url), 2000)
+      await uploadToServer(blob, {
+        onStage: (stage) => {
+          onStart?.(stage)
+        }
+      })
 
     } catch (err) {
       console.error("❌ export failed:", err)
@@ -119,7 +119,6 @@ export function recordCanvasVideo(canvas, media, options = {}) {
     chunks = []
     onStop()
   }
-
   recorder.start(1000)
 
   /* =========================

@@ -22,6 +22,11 @@ export default function PreviewCanvas(){
   const [offset,setOffset] = useState({x:0,y:0})
   const [flash,setFlash] = useState(null)
 
+  const [homePos, setHomePos] = useState({ x: 16, y: 16 })
+  const draggingHomeRef = useRef(false)
+  const homeStartRef = useRef({ x: 0, y: 0 })
+  const homeStartPosRef = useRef({ x: 0, y: 0 })
+
   /* editing */
   const editingRef = useRef(false)
   const startRef = useRef({x:0,y:0})
@@ -49,6 +54,39 @@ export default function PreviewCanvas(){
 
   const [mediaLoading, setMediaLoading] = useState(null)
   // null | "image" | "video"
+
+
+  
+  const movedHomeRef = useRef(false)
+
+  const onHomeDown = (e) => {
+    draggingHomeRef.current = true
+    movedHomeRef.current = false
+
+    homeStartRef.current = { x: e.clientX, y: e.clientY }
+    homeStartPosRef.current = homePos
+  }
+
+  const onHomeMove = (e) => {
+    if (!draggingHomeRef.current) return
+
+    const dx = e.clientX - homeStartRef.current.x
+    const dy = e.clientY - homeStartRef.current.y
+
+    // detect drag vs click
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      movedHomeRef.current = true
+    }
+
+    setHomePos({
+      x: homeStartPosRef.current.x + dx,
+      y: homeStartPosRef.current.y + dy
+    })
+  }
+
+  const onHomeUp = () => {
+    draggingHomeRef.current = false
+  }
 
 
   const btnStyle = {
@@ -236,6 +274,42 @@ export default function PreviewCanvas(){
     setExportStatus(null)
   }
 
+  const goHome = () => {
+    console.log("🏠 GO HOME")
+
+    // stop everything
+    cleanupMedia()
+
+    // stop recorder if active
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try {
+        recorderRef.current.stop()
+      } catch {}
+    }
+
+    // clear canvas
+    const canvas = canvasRef.current
+    if (canvas) {
+      const ctx = canvas.getContext("2d")
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+    }
+
+    // reset UI state
+    setRecording(false)
+    setProgress(0)
+    setExportStatus(null)
+    setMediaLoading(null)
+    setFlash(null)
+
+    // clear refs
+    mediaRef.current = null
+    landmarksRef.current = null
+    recorderRef.current = null
+
+    // reset editor values (important)
+    state.reset?.()
+  }
+
   const startCamera = async () => {
     cleanupMedia()
     setCameraLoading(true)
@@ -379,8 +453,12 @@ export default function PreviewCanvas(){
       recorderRef.current = recordCanvasVideo(canvas, media, {
         withAudio: true,
 
-        onStart: () => {
-          console.log("🎬 RECORD START")
+        onStart: (state) => {
+          if (state) {
+            setExportStatus(state)
+            return
+          }
+
           setRecording(true)
           setExportStatus("recording")
         },
@@ -401,8 +479,6 @@ export default function PreviewCanvas(){
             setExportStatus(null)
             return
           }
-
-          setExportStatus("done")
           setTimeout(() => setExportStatus(null), 1500)
         }
       })
@@ -510,6 +586,7 @@ export default function PreviewCanvas(){
   }, [recording])
   
   return (
+
     <div
       className="preview"
       style={{
@@ -520,6 +597,47 @@ export default function PreviewCanvas(){
         background: "black"
       }}
     >
+
+      <button
+        onMouseDown={onHomeDown}
+        onMouseMove={onHomeMove}
+        onMouseUp={onHomeUp}
+        onMouseLeave={onHomeUp}
+
+        onTouchStart={(e)=>{
+          const t = e.touches[0]
+          onHomeDown({ clientX:t.clientX, clientY:t.clientY })
+        }}
+        onTouchMove={(e)=>{
+          const t = e.touches[0]
+          onHomeMove({ clientX:t.clientX, clientY:t.clientY })
+        }}
+        onTouchEnd={onHomeUp}
+
+        onClick={() => {
+          if (!movedHomeRef.current) {
+            goHome()
+          }
+        }}
+
+        style={{
+          position: "absolute",
+          left: homePos.x,
+          top: homePos.y,
+          zIndex: 9999,
+          width: 22,
+          height: 22,
+          borderRadius: "50%",
+          background: "rgba(0,0,0,0.45)",
+          backdropFilter: "blur(12px)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          color: "white",
+          cursor: "grab",
+          fontSize: "10px"
+        }}
+      >
+        🏠
+      </button>
 
       {bootStage !== "ready" && (
         <div
@@ -796,6 +914,9 @@ export default function PreviewCanvas(){
             <div style={{ fontSize: "16px", marginBottom: "10px" }}>
               {exportStatus === "preparing" && "Preparing file..."}
               {exportStatus === "recording" && "Recording video"}
+              {exportStatus === "uploading" && "Uploading video..."}
+              {exportStatus === "processing" && "Processing video..."}
+              {exportStatus === "downloading" && "Downloading file..."}
               {exportStatus === "done" && "Saved successfully"}
             </div>
 
