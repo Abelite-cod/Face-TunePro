@@ -10,7 +10,6 @@ export function downloadImage(canvas) {
     const link = document.createElement("a")
     link.download = "face-edit.png"
 
-    // 🔥 FORCE canvas snapshot (fix blank image)
     const dataUrl = canvas.toDataURL("image/png")
 
     if (!dataUrl || dataUrl === "data:,") {
@@ -20,8 +19,6 @@ export function downloadImage(canvas) {
 
     link.href = dataUrl
     link.click()
-
-    
 
   } catch (err) {
     console.error("❌ image export failed:", err)
@@ -57,10 +54,20 @@ export function recordCanvasVideo(canvas, media, options = {}) {
     }
   }
 
-  // 🎥 FORMAT
+  /* =========================
+     🎥 FORMAT (OPTION A)
+  ========================= */
+
   let mimeType = ""
 
-  if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
+  // 🔥 TRY MP4 FIRST
+  if (MediaRecorder.isTypeSupported("video/mp4;codecs=h264,aac")) {
+    mimeType = "video/mp4;codecs=h264,aac"
+  } else if (MediaRecorder.isTypeSupported("video/mp4")) {
+    mimeType = "video/mp4"
+  } 
+  // fallback (most browsers)
+  else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
     mimeType = "video/webm;codecs=vp9"
   } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
     mimeType = "video/webm;codecs=vp8"
@@ -68,61 +75,75 @@ export function recordCanvasVideo(canvas, media, options = {}) {
     mimeType = "video/webm"
   }
 
+  console.log("🎥 recording format:", mimeType)
+
   const recorder = new MediaRecorder(finalStream, {
     mimeType,
-    videoBitsPerSecond: 3_000_000 // ✅ LOWER = faster + stable
+    videoBitsPerSecond: 4_000_000 // 🔥 slightly higher for better quality
   })
 
   let chunks = []
   let startTime = null
 
-  // ✅ STREAM chunks continuously (CRITICAL FIX)
+  // ✅ STREAM chunks
   recorder.ondataavailable = (e) => {
-    console.log("📦 chunk:", e.data.size)
-
     if (e.data.size > 0) {
       chunks.push(e.data)
     }
   }
 
   recorder.onstart = () => {
-    console.log("🟢 recorder STARTED")
     startTime = Date.now()
     onStart()
   }
 
   recorder.onstop = () => {
+    try {
+      const blob = new Blob(chunks, { type: mimeType })
 
-    console.log("🔴 recorder STOPPED")
-    console.log("📦 total chunks:", chunks.length)
+      const url = URL.createObjectURL(blob)
 
-    const blob = new Blob(chunks, { type: mimeType })
-    const url = URL.createObjectURL(blob)
+      const ext = mimeType.includes("mp4") ? "mp4" : "webm"
 
-    const a = document.createElement("a")
-    a.href = url
-    a.download = "face-edit.webm"
-    a.click()
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `face-edit.${ext}`
+      a.click()
 
-    setTimeout(() => URL.revokeObjectURL(url), 2000)
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
 
-    chunks = [] // ✅ free memory
+    } catch (err) {
+      console.error("❌ export failed:", err)
+    }
+
+    chunks = []
     onStop()
   }
 
-  // ✅ KEY FIX: timeslice = flush every 1 second
   recorder.start(1000)
 
-  // 🎯 PROGRESS SYNC
+  /* =========================
+     🎯 PROGRESS
+  ========================= */
+
   if (media && media.tagName === "VIDEO") {
     const duration = media.duration
 
     if (!isNaN(duration)) {
+      let lastProgress = 0
+
       const interval = setInterval(() => {
         const current = media.currentTime
-        const progress = current / duration
+        let progress = current / duration
 
-        onProgress(progress)
+        // clamp
+        progress = Math.max(0, Math.min(1, progress))
+
+        // 🧠 prevent tiny jumps (flicker fix)
+        if (Math.abs(progress - lastProgress) > 0.01) {
+          lastProgress = progress
+          onProgress(progress)
+        }
 
         if (progress >= 0.999) {
           clearInterval(interval)

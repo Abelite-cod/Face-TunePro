@@ -13,6 +13,7 @@ export default function PreviewCanvas(){
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const mediaRef = useRef(null)
+  const pendingFileRef = useRef(null)
 
   const landmarksRef = useRef(null)
   const detectingRef = useRef(false)
@@ -42,6 +43,13 @@ export default function PreviewCanvas(){
   }
 
   const [cameraLoading, setCameraLoading] = useState(false)
+  const [engineReady, setEngineReady] = useState(false)
+  const [bootStage, setBootStage] = useState("loading") 
+  // "loading" | "ready"
+
+  const [mediaLoading, setMediaLoading] = useState(null)
+  // null | "image" | "video"
+
 
   const btnStyle = {
     padding: "10px 18px",
@@ -56,6 +64,10 @@ export default function PreviewCanvas(){
   }
 
   const startPipeline = (media) => {
+    if (!engineReady) {
+      console.warn("⏳ Engine not ready")
+      return
+    }
     const canvas = canvasRef.current
     if (!canvas || !media) return
 
@@ -88,15 +100,51 @@ export default function PreviewCanvas(){
       }
     }
   }
-  useEffect(()=>{
-    initFaceMesh()
+  useEffect(() => {
 
-    const open = ()=> startCamera()
+    const boot = async () => {
+      try {
+        setBootStage("loading")
+
+        await initFaceMesh()   // 🔥 wait properly
+
+        await new Promise(r => setTimeout(r, 200)) // small buffer
+
+        setEngineReady(true)
+        // 🔥 process queued file
+        if (pendingFileRef.current) {
+          const file = pendingFileRef.current
+
+          if (file.type.startsWith("image")) {
+            loadImage(file)
+          } else {
+            loadVideo(file)
+          }
+
+          pendingFileRef.current = null
+        }
+
+        setTimeout(() => {
+          setBootStage("ready")
+        }, 300)
+
+      } catch (e) {
+        console.error("❌ Engine failed:", e)
+      }
+    }
+
+    boot()
+
+    const open = () => {
+      if (!engineReady) return
+      startCamera()
+    }
+
     window.addEventListener("open-camera", open)
 
-    return ()=> window.removeEventListener("open-camera", open)
+    return () => window.removeEventListener("open-camera", open)
 
-  },[])
+  }, [engineReady])
 
   
   /* ---------- CAMERA (FIXED) ---------- */
@@ -139,7 +187,57 @@ export default function PreviewCanvas(){
     throw new Error("No camera config worked")
   }
 
+  const cleanupMedia = () => {
+    console.log("🧹 cleaning previous media...")
+
+    // 🛑 stop pipeline
+    if (stopPipelineRef.current) {
+      try {
+        stopPipelineRef.current()
+      } catch (e) {
+        console.warn("pipeline stop error", e)
+      }
+      stopPipelineRef.current = null
+    }
+
+    // 🛑 stop recorder
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try {
+        recorderRef.current.stop()
+      } catch (e) {
+        console.warn("recorder stop error", e)
+      }
+    }
+
+    // 🛑 stop camera stream
+    if (videoRef.current?.srcObject) {
+      videoRef.current.srcObject.getTracks().forEach(t => t.stop())
+      videoRef.current.srcObject = null
+    }
+
+    // 🛑 stop HTML video playback (uploaded videos)
+    if (mediaRef.current && mediaRef.current.tagName === "VIDEO") {
+      try {
+        mediaRef.current.pause()
+        mediaRef.current.currentTime = 0
+        mediaRef.current.src = ""
+      } catch (e) {
+        console.warn("video cleanup error", e)
+      }
+    }
+
+    // 🧼 reset refs
+    mediaRef.current = null
+    landmarksRef.current = null
+
+    // 🧼 reset UI states
+    setRecording(false)
+    setProgress(0)
+    setExportStatus(null)
+  }
+
   const startCamera = async () => {
+    cleanupMedia()
     setCameraLoading(true)
     try{
 
@@ -188,32 +286,44 @@ export default function PreviewCanvas(){
   /* ---------- IMAGE ---------- */
 
   const loadImage = (file) => {
-    // 🛑 stop camera stream if running
-    if (videoRef.current?.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach(t => t.stop())
-      videoRef.current.srcObject = null
+    if (!engineReady) {
+      console.warn("⏳ Engine not ready")
+      return
     }
+
+    cleanupMedia()
+    setMediaLoading("image") // 🔥 START LOADING
+
     const img = new Image()
     img.src = URL.createObjectURL(file)
 
     img.onload = () => {
-      
       mediaRef.current = img
       landmarksRef.current = null
 
       startPipeline(img)
-      
+
+      setMediaLoading(null) // ✅ DONE
+    }
+
+    img.onerror = () => {
+      console.warn("❌ image load failed")
+      setMediaLoading(null)
     }
   }
 
   /* ---------- VIDEO ---------- */
 
   const loadVideo = (file) => {
-    // 🛑 stop camera stream if running
-    if (videoRef.current?.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach(t => t.stop())
-      videoRef.current.srcObject = null
+
+    if (!engineReady) {
+      console.warn("⏳ Engine not ready")
+      return
     }
+
+    cleanupMedia()
+    setMediaLoading("video") // 🔥 START LOADING
+
     const vid = document.createElement("video")
     vid.src = URL.createObjectURL(file)
     vid.loop = false
@@ -228,13 +338,18 @@ export default function PreviewCanvas(){
 
       startPipeline(vid)
 
+      setMediaLoading(null) // ✅ DONE
+
       const enableAudio = () => {
         vid.muted = false
         vid.play()
       }
-      document.addEventListener("click", enableAudio, { once: true })
-    
-      
+      window.addEventListener("click", enableAudio, { once: true })
+    }
+
+    vid.onerror = () => {
+      console.warn("❌ video load failed")
+      setMediaLoading(null)
     }
   }
 
@@ -253,7 +368,7 @@ export default function PreviewCanvas(){
     await forceRenderFrame()
 
     if (media.tagName === "VIDEO" && !media.srcObject) {
-
+      media.muted = false
       const wasLooping = media.loop
       media.loop = false
 
@@ -406,6 +521,50 @@ export default function PreviewCanvas(){
       }}
     >
 
+      {bootStage !== "ready" && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 999,
+            background: "black",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "white",
+            transition: "opacity 0.4s ease",
+            opacity: bootStage === "loading" ? 1 : 0,
+            pointerEvents: "all"
+          }}
+        >
+          <div style={{
+            fontSize: "22px",
+            fontWeight: "600",
+            marginBottom: "12px"
+          }}>
+            Face Editor
+          </div>
+
+          <div style={{
+            fontSize: "13px",
+            opacity: 0.7
+          }}>
+            Initializing engine...
+          </div>
+
+          <div style={{
+            marginTop: "20px",
+            width: "28px",
+            height: "28px",
+            border: "3px solid rgba(255,255,255,0.2)",
+            borderTop: "3px solid white",
+            borderRadius: "50%",
+            animation: "spin 1s linear infinite"
+          }} />
+        </div>
+      )}
+
       {/* 🎥 CANVAS */}
       <canvas
         ref={canvasRef}
@@ -472,7 +631,7 @@ export default function PreviewCanvas(){
           right: 0,
           display: "flex",
           justifyContent: "center",
-          zIndex: 10
+          zIndex: 30
         }}
       >
         <div
@@ -496,6 +655,13 @@ export default function PreviewCanvas(){
               onChange={(e) => {
                 const file = e.target.files[0]
                 if (!file) return
+
+                // 🔥 queue if engine not ready
+                if (!engineReady) {
+                  pendingFileRef.current = file
+                  return
+                }
+
                 file.type.startsWith("image")
                   ? loadImage(file)
                   : loadVideo(file)
@@ -520,16 +686,22 @@ export default function PreviewCanvas(){
           </button>
 
           {/* Cancel */}
-          {(recording || exportStatus === "preparing") && (
+          {(recording || exportStatus === "preparing" || mediaLoading) && (
             <button
               onClick={() => {
                 console.log("❌ CANCEL CLICKED")
-                console.log("recorder:", recorderRef.current)
-                console.log("state:", recorderRef.current?.state)
+
                 cancelledRef.current = true
 
+                // 🛑 cancel export
                 if (recorderRef.current && recorderRef.current.state !== "inactive") {
                   recorderRef.current.stop()
+                }
+
+                // 🛑 cancel loading
+                if (mediaLoading) {
+                  cleanupMedia()
+                  setMediaLoading(null)
                 }
 
                 if (exportStatus === "preparing") {
@@ -559,6 +731,26 @@ export default function PreviewCanvas(){
           }}
         >
           Opening camera...
+        </div>
+      )}
+
+      {/* 📂 MEDIA LOADING */}
+      {mediaLoading && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "white",
+            background: "rgba(0,0,0,0.5)",
+            zIndex: 15,
+            animation: "spin 1s linear infinite"
+          }}
+        >
+          {mediaLoading === "image" && "Loading image..."}
+          {mediaLoading === "video" && "Loading video..."}
         </div>
       )}
 

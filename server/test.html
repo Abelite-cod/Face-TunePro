@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html>
+<body>
+
+<h2>Test Upload</h2>
+
+<input type="file" id="file" />
+<button onclick="upload()">Upload</button>
+
+<script>
+async function upload() {
+  const fileInput = document.getElementById("file")
+  const file = fileInput.files[0]
+
+  if (!file) {
+    alert("Select a file")
+    return
+  }
+
+  const formData = new FormData()
+  formData.append("video", file)
+
+  const res = await fetch("http://localhost:5000/export", {
+    method: "POST",
+    body: formData
+  })
+
+  const blob = await res.blob()
+
+  const url = URL.createObjectURL(blob)
+
+  const a = document.createElement("a")
+  a.href = url
+  a.download = "test.mp4"
+  a.click()
+}
+</script>
+
+</body>
+</html>
