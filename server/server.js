@@ -52,38 +52,49 @@ app.post("/export", upload.single("video"), async (req, res) => {
     console.log("🎬 processing:", inputPath)
 
     ffmpeg(inputPath)
-      .videoCodec("libx264")   // ✅ iPhone safe
-      .audioCodec("aac")       // ✅ iPhone safe
+      .videoCodec("libx264")
+      .audioCodec("aac")
       .outputOptions([
-        "-preset veryfast",     // speed vs quality
-        "-crf 23",              // quality control
-        "-movflags +faststart"  // streamable MP4
+        "-preset ultrafast",        // 🔥 lower memory
+        "-crf 28",                  // slightly smaller file
+        "-threads 1",               // 🔥 prevent RAM spike
+        "-movflags +faststart",
+        "-pix_fmt yuv420p"
       ])
+      .on("start", (cmd) => {
+        console.log("🎬 ffmpeg start")
+        console.log(cmd)
+      })
+      .on("progress", (p) => {
+        if (p.percent) {
+          console.log(`⏳ ${p.percent.toFixed(1)}%`)
+        }
+      })
       .on("end", () => {
         console.log("✅ finished:", outputPath)
 
-        res.download(outputPath, "face-edit.mp4", (err) => {
-          if (err) {
-            console.error("❌ download error:", err)
-          }
+        res.setHeader("Content-Type", "video/mp4")
+        res.setHeader(
+          "Content-Disposition",
+          "attachment; filename=face-edit.mp4"
+        )
 
-          // 🧹 CLEANUP (SAFE)
-          setTimeout(() => {
-            fs.unlink(inputPath, () => {})
-            fs.unlink(outputPath, () => {})
-          }, 3000)
+        const stream = fs.createReadStream(outputPath)
+        stream.pipe(res)
+
+        stream.on("close", () => {
+          fs.unlink(inputPath, () => {})
+          fs.unlink(outputPath, () => {})
         })
       })
       .on("error", (err) => {
         console.error("❌ ffmpeg error:", err)
 
-        // cleanup input if failed
         fs.unlink(inputPath, () => {})
-
         res.status(500).send("Processing failed")
       })
       .save(outputPath)
-
+      
   } catch (err) {
     console.error("❌ server error:", err)
     res.status(500).send("Server error")
