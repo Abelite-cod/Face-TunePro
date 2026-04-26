@@ -52,7 +52,7 @@ export default function PreviewCanvas(){
   const [bootStage, setBootStage] = useState("loading") 
   // "loading" | "ready"
 
-  const [mediaLoading, setMediaLoading] = useState(null)
+  const [mediaLoading, setMediaLoading] = useState(false)
   // null | "image" | "video"
 
 
@@ -366,7 +366,7 @@ export default function PreviewCanvas(){
     }
 
     cleanupMedia()
-    setMediaLoading("image") // 🔥 START LOADING
+    setMediaLoading(true) // 🔥 START LOADING
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
@@ -377,7 +377,7 @@ export default function PreviewCanvas(){
 
       startPipeline(img)
 
-      setMediaLoading(null) // ✅ DONE
+      setMediaLoading(false) // ✅ DONE
     }
 
     img.onerror = () => {
@@ -396,7 +396,7 @@ export default function PreviewCanvas(){
     }
 
     cleanupMedia()
-    setMediaLoading("video") // 🔥 START LOADING
+    setMediaLoading(true) // 🔥 START LOADING
 
     const vid = document.createElement("video")
     vid.src = URL.createObjectURL(file)
@@ -412,13 +412,17 @@ export default function PreviewCanvas(){
 
       startPipeline(vid)
 
-      setMediaLoading(null) // ✅ DONE
+      setMediaLoading(false) // ✅ DONE
 
       const enableAudio = () => {
         vid.muted = false
         vid.play()
       }
-      window.addEventListener("click", enableAudio, { once: true })
+      window.onclick = null
+      window.onclick = () => {
+        vid.muted = false
+        vid.play()
+      }
     }
 
     vid.onerror = () => {
@@ -449,7 +453,8 @@ export default function PreviewCanvas(){
       media.currentTime = 0
       await media.play()
       await forceRenderFrame()
-
+      
+      let lastProgress = 0
       recorderRef.current = recordCanvasVideo(canvas, media, {
         withAudio: true,
 
@@ -463,8 +468,15 @@ export default function PreviewCanvas(){
           setExportStatus("recording")
         },
 
+        
+
         onProgress: (p) => {
-          setProgress(Math.round(p * 100))
+          const next = Math.round(p * 100)
+
+          if (next !== lastProgress) {
+            lastProgress = next
+            setProgress(next)
+          }
         },
 
         onStop: () => {
@@ -864,11 +876,10 @@ export default function PreviewCanvas(){
             color: "white",
             background: "rgba(0,0,0,0.5)",
             zIndex: 15,
-            animation: "spin 1s linear infinite"
+            animation: "spin 0.3s linear infinite"
           }}
         >
-          {mediaLoading === "image" && "Loading image..."}
-          {mediaLoading === "video" && "Loading video..."}
+          ....
         </div>
       )}
 

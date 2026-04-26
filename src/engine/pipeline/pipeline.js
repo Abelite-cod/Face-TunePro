@@ -53,10 +53,15 @@ export function runPipeline(media, canvas, state) {
 
   function stop() {
     running = false
+
     if (rafId) cancelAnimationFrame(rafId)
 
-    // ✅ reset smoothing when stopping
+    // 🔥 HARD RESET (CRITICAL)
     prevLandmarks = null
+    window.__landmarks = null
+    window.__lastDetect = null
+    window.__detecting = false
+    window.__lastMedia = null
   }
 
   async function loop() {
@@ -95,22 +100,30 @@ export function runPipeline(media, canvas, state) {
 
       // ✅ ALSO reset smoothing when media changes
       prevLandmarks = null
+      window.__detecting = false
     }
 
-    const DETECT_INTERVAL = document.hidden ? 300 : 120
+    const DETECT_INTERVAL = document.hidden ? 400 : 80
     const isStaticImage = current.tagName === "IMG"
 
     if (isStaticImage && window.__landmarks) {
       // reuse
-    } else if (!window.__lastDetect || Date.now() - window.__lastDetect > DETECT_INTERVAL) {
-      const detected = await getLandmarks(current)
-      if (detected) window.__landmarks = detected
-      window.__lastDetect = Date.now()
-    }
+    } if (!window.__detecting) {
+        window.__detecting = true
+
+        const detected = await getLandmarks(current)
+
+        if (detected) {
+          window.__landmarks = detected
+        }
+
+        window.__lastDetect = Date.now()
+        window.__detecting = false
+      }
 
     landmarks = window.__landmarks
 
-    if (!landmarks) {
+    if (!landmarks || landmarks.length === 0) {
       renderFrame(gl, current, null, null, {})
       gl.flush()
       rafId = requestAnimationFrame(loop)
@@ -146,7 +159,6 @@ export function runPipeline(media, canvas, state) {
     })
 
     gl.flush()
-    gl.finish()
 
     rafId = requestAnimationFrame(loop)
   }

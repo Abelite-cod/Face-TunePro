@@ -47,7 +47,7 @@ export function recordCanvasVideo(canvas, media, options = {}) {
       if (audioTracks.length > 0) {
         finalStream = new MediaStream([
           ...canvasStream.getVideoTracks(),
-          ...audioTracks
+          audioTracks[0] // 🔥 ONLY FIRST TRACK
         ])
       }
     } catch (e) {
@@ -59,20 +59,9 @@ export function recordCanvasVideo(canvas, media, options = {}) {
      🎥 FORMAT (OPTION A)
   ========================= */
 
-  let mimeType = ""
+  let mimeType = "video/webm;codecs=vp8,opus"
 
-  // 🔥 TRY MP4 FIRST
-  if (MediaRecorder.isTypeSupported("video/mp4;codecs=h264,aac")) {
-    mimeType = "video/mp4;codecs=h264,aac"
-  } else if (MediaRecorder.isTypeSupported("video/mp4")) {
-    mimeType = "video/mp4"
-  } 
-  // fallback (most browsers)
-  else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
-    mimeType = "video/webm;codecs=vp9"
-  } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
-    mimeType = "video/webm;codecs=vp8"
-  } else {
+  if (!MediaRecorder.isTypeSupported(mimeType)) {
     mimeType = "video/webm"
   }
 
@@ -80,7 +69,7 @@ export function recordCanvasVideo(canvas, media, options = {}) {
 
   const recorder = new MediaRecorder(finalStream, {
     mimeType,
-    videoBitsPerSecond: 4_000_000 // 🔥 slightly higher for better quality
+    videoBitsPerSecond: 5_000_000 // 🔥 slightly higher for better quality
   })
 
   let chunks = []
@@ -99,6 +88,10 @@ export function recordCanvasVideo(canvas, media, options = {}) {
   }
 
   recorder.onstop = async () => {
+    if (chunks.length === 0) {
+      console.warn("⚠️ no chunks recorded")
+      return
+    }
     try {
       const blob = new Blob(chunks, { type: mimeType })
 
@@ -119,7 +112,7 @@ export function recordCanvasVideo(canvas, media, options = {}) {
     chunks = []
     onStop()
   }
-  recorder.start(1000)
+  recorder.start(250)
 
   /* =========================
      🎯 PROGRESS

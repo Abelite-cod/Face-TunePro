@@ -120,9 +120,6 @@ export function deform(landmarks, settings) {
     const left = [70,63,105,66,107,55,65,52,53,46,193,189]
     const right = [336,296,334,293,300,285,295,282,283,276,417,413]
 
-    console.log("LEFT sample:", left.map(i => output[i]))
-    console.log("RIGHT sample:", right.map(i => output[i]))
-    
     const c = getCenter(output, left)
 
     const angle = tilt * 0.35
@@ -139,7 +136,8 @@ export function deform(landmarks, settings) {
       dy = dy * (1 + thick * 0.6 * f)
 
       // 2️⃣ lift
-      dy -= lift * 4.5 * f
+      const DEBUG_MULTIPLIER = 5
+      dy -= lift * 4.5 * f * DEBUG_MULTIPLIER
 
       // 3️⃣ shape curve (natural arch)
       dy -= dx * dx * shape * 0.0012
@@ -150,6 +148,8 @@ export function deform(landmarks, settings) {
 
       output[i].x = c.x + nx
       output[i].y = c.y + ny
+      // lift
+      output[i].y -= lift * 6 * f * DEBUG_MULTIPLIER
     }
 
     // 5️⃣ MIRROR (critical for stability)
@@ -171,8 +171,7 @@ export function deform(landmarks, settings) {
     for (let i of left) output[i].x -= spacing
     for (let i of right) output[i].x += spacing
 
-    console.log("AFTER LEFT:", left.map(i => output[i]))
-    console.log("AFTER RIGHT:", right.map(i => output[i]))
+   
   }
 
   if (category === "face") {
