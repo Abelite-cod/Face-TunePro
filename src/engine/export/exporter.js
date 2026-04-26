@@ -1,5 +1,9 @@
 // /src/engine/export/exporter.js
-import { uploadToServer } from "./uploadToServer"
+import { Muxer, ArrayBufferTarget } from "mp4-muxer"
+
+/* =========================
+   📸 IMAGE EXPORT
+========================= */
 
 export function downloadImage(canvas) {
   if (!canvas) {
@@ -8,142 +12,257 @@ export function downloadImage(canvas) {
   }
 
   try {
-    const link = document.createElement("a")
-    link.download = "face-edit.png"
+    const gl = canvas.getContext("webgl") || canvas.getContext("webgl2")
 
-    const dataUrl = canvas.toDataURL("image/png")
+    // wait for GPU to finish
+    if (gl) gl.finish()
 
-    if (!dataUrl || dataUrl === "data:,") {
-      console.warn("⚠️ empty canvas export")
-      return
-    }
+    requestAnimationFrame(() => {
+      try {
+        const dataUrl = canvas.toDataURL("image/png")
 
-    link.href = dataUrl
-    link.click()
+        if (!dataUrl || dataUrl === "data:,") {
+          console.warn("⚠️ empty canvas export")
+          return
+        }
+
+        const link = document.createElement("a")
+        link.download = "face-edit.png"
+        link.href = dataUrl
+        link.click()
+
+      } catch (err) {
+        console.error("❌ image export failed (inner):", err)
+      }
+    })
 
   } catch (err) {
     console.error("❌ image export failed:", err)
   }
 }
 
-export function recordCanvasVideo(canvas, media, options = {}) {
+
+/* =========================
+   🎥 VIDEO EXPORT
+========================= */
+
+export async function recordCanvasVideo(canvas, media, options = {}) {
   const {
     fps = 30,
-    withAudio = true,
     onProgress = () => {},
     onStart = () => {},
     onStop = () => {}
   } = options
 
-  const canvasStream = canvas.captureStream(fps)
-  let finalStream = canvasStream
+  const width = canvas.width
+  const height = canvas.height
 
-  // 🎧 AUDIO
-  if (withAudio && media && media.captureStream) {
-    try {
-      const audioStream = media.captureStream()
-      const audioTracks = audioStream.getAudioTracks()
+  const target = new ArrayBufferTarget()
 
-      if (audioTracks.length > 0) {
-        finalStream = new MediaStream([
-          ...canvasStream.getVideoTracks(),
-          audioTracks[0] // 🔥 ONLY FIRST TRACK
-        ])
-      }
-    } catch (e) {
-      console.warn("⚠️ audio capture failed", e)
-    }
-  }
+  // 🔥 GLOBAL CLOCK (shared)
+  const startTime = performance.now()
 
-  /* =========================
-     🎥 FORMAT (OPTION A)
-  ========================= */
+  const muxer = new Muxer({
+    target,
+    video: {
+      codec: "avc",
+      width,
+      height
+    },
+    audio: {
+      codec: "aac",
+      sampleRate: 48000,
+      numberOfChannels: 2
+    },
+    fastStart: "in-memory",
 
-  let mimeType = "video/webm;codecs=vp8,opus"
-
-  if (!MediaRecorder.isTypeSupported(mimeType)) {
-    mimeType = "video/webm"
-  }
-
-  console.log("🎥 recording format:", mimeType)
-
-  const recorder = new MediaRecorder(finalStream, {
-    mimeType,
-    videoBitsPerSecond: 5_000_000 // 🔥 slightly higher for better quality
+    // 🔥 prevents non-zero timestamp crash
+    firstTimestampBehavior: "offset"
   })
 
-  let chunks = []
-  let startTime = null
-
-  // ✅ STREAM chunks
-  recorder.ondataavailable = (e) => {
-    if (e.data.size > 0) {
-      chunks.push(e.data)
-    }
-  }
-
-  recorder.onstart = () => {
-    startTime = Date.now()
-    onStart()
-  }
-
-  recorder.onstop = async () => {
-    if (chunks.length === 0) {
-      console.warn("⚠️ no chunks recorded")
-      return
-    }
-    try {
-      const blob = new Blob(chunks, { type: mimeType })
-
-      console.log("⬆️ sending to server...", blob.size)
-
-      onProgress(1)
-
-      await uploadToServer(blob, {
-        onStage: (stage) => {
-          onStart?.(stage)
-        }
-      })
-
-    } catch (err) {
-      console.error("❌ export failed:", err)
-    }
-
-    chunks = []
-    onStop()
-  }
-  recorder.start(250)
-
   /* =========================
-     🎯 PROGRESS
+     🎥 VIDEO ENCODER
   ========================= */
 
-  if (media && media.tagName === "VIDEO") {
+  const videoEncoder = new VideoEncoder({
+    output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+    error: (e) => console.error("video encoder error:", e)
+  })
+
+  videoEncoder.configure({
+    codec: "avc1.42001f",
+    width,
+    height,
+    bitrate: 5_000_000,
+    framerate: fps
+  })
+
+
+  /* =========================
+     🔊 AUDIO SETUP
+  ========================= */
+
+  let audioEncoder = null
+  let audioCtx = null
+  let workletNode = null
+
+  // 🔥 SAMPLE-ACCURATE CLOCK
+  let audioTimestamp = 0
+
+  try {
+    const stream = media.captureStream()
+
+    audioCtx = new AudioContext({ sampleRate: 48000 })
+
+    await audioCtx.audioWorklet.addModule("/src/engine/export/audioProcessor.js")
+
+    const source = audioCtx.createMediaStreamSource(stream)
+    workletNode = new AudioWorkletNode(audioCtx, "pcm-processor")
+
+    source.connect(workletNode)
+    workletNode.connect(audioCtx.destination)
+
+    audioEncoder = new AudioEncoder({
+      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+      error: (e) => console.error("audio encoder error:", e)
+    })
+
+    audioEncoder.configure({
+      codec: "mp4a.40.2",
+      sampleRate: 48000,
+      numberOfChannels: 2,
+      bitrate: 128000
+    })
+
+    workletNode.port.onmessage = (e) => {
+      const channels = e.data
+
+      const frame = new AudioData({
+        format: "f32",
+        sampleRate: 48000,
+        numberOfFrames: channels[0].length,
+        numberOfChannels: channels.length,
+        timestamp: audioTimestamp, // ✅ always starts at 0
+        data: interleave(channels)
+      })
+
+      audioEncoder.encode(frame)
+      frame.close()
+
+      // advance timestamp correctly (microseconds)
+      audioTimestamp += (channels[0].length / 48000) * 1_000_000
+    }
+
+  } catch (e) {
+    console.warn("⚠️ audio pipeline failed, continuing without audio", e)
+  }
+
+
+  /* =========================
+     🎥 VIDEO LOOP
+  ========================= */
+
+  let running = true
+  let lastTime = 0
+  const frameInterval = 1000 / fps
+
+  onStart()
+
+  const draw = async (now) => {
+    if (!running) return
+
+    if (now - lastTime < frameInterval) {
+      requestAnimationFrame(draw)
+      return
+    }
+
+    lastTime = now
+
+    const bitmap = await createImageBitmap(canvas)
+
+    const videoFrame = new VideoFrame(bitmap, {
+      timestamp: (now - startTime) * 1000 // microseconds
+    })
+
+    videoEncoder.encode(videoFrame)
+
+    videoFrame.close()
+    bitmap.close()
+
+    requestAnimationFrame(draw)
+  }
+
+  requestAnimationFrame(draw)
+
+
+  /* =========================
+     🛑 STOP
+  ========================= */
+
+  const stop = async () => {
+    running = false
+
+    await new Promise(r => setTimeout(r, 50))
+
+    await videoEncoder.flush()
+    if (audioEncoder) await audioEncoder.flush()
+
+    muxer.finalize()
+
+    const buffer = target.buffer
+    const blob = new Blob([buffer], { type: "video/mp4" })
+
+    const url = URL.createObjectURL(blob)
+
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "face-edit.mp4"
+    a.click()
+
+    setTimeout(() => URL.revokeObjectURL(url), 2000)
+
+    // cleanup
+    if (audioCtx) audioCtx.close()
+
+    onStop()
+  }
+
+
+  /* =========================
+     📊 PROGRESS TRACKING
+  ========================= */
+
+  if (media.tagName === "VIDEO") {
     const duration = media.duration
 
-    if (!isNaN(duration)) {
-      let lastProgress = 0
+    const interval = setInterval(() => {
+      const progress = media.currentTime / duration
+      onProgress(progress)
 
-      const interval = setInterval(() => {
-        const current = media.currentTime
-        let progress = current / duration
+      if (progress >= 0.999) {
+        clearInterval(interval)
+        stop()
+      }
+    }, 100)
+  }
 
-        // clamp
-        progress = Math.max(0, Math.min(1, progress))
+  return { stop }
+}
 
-        // 🧠 prevent tiny jumps (flicker fix)
-        if (Math.abs(progress - lastProgress) > 0.01) {
-          lastProgress = progress
-          onProgress(progress)
-        }
 
-        if (progress >= 0.999) {
-          clearInterval(interval)
-          recorder.stop()
-        }
-      }, 100)
+/* =========================
+   🔧 INTERLEAVE AUDIO
+========================= */
+
+function interleave(channels) {
+  const length = channels[0].length
+  const result = new Float32Array(length * channels.length)
+
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < channels.length; ch++) {
+      result[i * channels.length + ch] = channels[ch][i]
     }
   }
 
-  return recorder
+  return result
 }

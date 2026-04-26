@@ -42,7 +42,9 @@ export default function PreviewCanvas(){
   const forceRenderFrame = () => {
     return new Promise((resolve) => {
       requestAnimationFrame(() => {
-        setTimeout(resolve, 16) // ✅ allow GPU to settle
+        requestAnimationFrame(() => {
+          resolve()
+        })
       })
     })
   }
@@ -184,6 +186,28 @@ export default function PreviewCanvas(){
 
   }, [engineReady])
 
+
+  // useEffect(() => {
+  //   const ping = async () => {
+  //     try {
+  //       console.log("🏓 pinging server...")
+
+  //       const res = await fetch("https://face-tunepro.onrender.com", {
+  //         method: "GET",
+  //         cache: "no-store"
+  //       })
+
+  //       console.log("✅ server awake:", res.status)
+  //     } catch (e) {
+  //       console.log("❌ ping failed")
+  //     }
+  //   }
+
+  //   ping()
+  //   const id = setInterval(ping, 10 * 60 * 1000)
+
+  //   return () => clearInterval(id)
+  // }, [])
   
   /* ---------- CAMERA (FIXED) ---------- */
 
@@ -503,22 +527,26 @@ export default function PreviewCanvas(){
   }
   /* ---------- PLAY / PAUSE ---------- */
 
-  const togglePlay = () => {
-
+  const togglePlay = async () => {
     const media = mediaRef.current
 
-    if(!media) return
-    if(media.tagName !== "VIDEO") return
+    if (!media || media.tagName !== "VIDEO") return
 
-    if(media.paused){
-      media.play()
-      setFlash("play")
-    }else{
-      media.pause()
-      setFlash("pause")
+    try {
+      if (media.paused) {
+        await media.play()
+        console.log("▶️ PLAY")
+        setFlash("play")
+      } else {
+        media.pause()
+        console.log("⏸ PAUSE", media.paused)
+        setFlash("pause")
+      }
+    } catch (e) {
+      console.warn("⚠️ play/pause error:", e)
     }
 
-    setTimeout(()=>setFlash(null),500)
+    setTimeout(() => setFlash(null), 500)
   }
 
   /* ---------- DRAG EDIT ---------- */

@@ -28,7 +28,10 @@ export function runPipeline(media, canvas, state) {
   let rafId = null
   let cachedControls = {}
 
-  const gl = canvas.getContext("webgl")
+  const gl = canvas.getContext("webgl", {
+    preserveDrawingBuffer: true,
+    premultipliedAlpha: false
+  })
 
   if (!gl) {
     console.error("❌ WebGL not supported")
