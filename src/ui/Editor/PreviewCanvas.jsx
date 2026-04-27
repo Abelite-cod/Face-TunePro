@@ -58,7 +58,7 @@ export default function PreviewCanvas(){
   // null | "image" | "video"
 
 
-  
+  const movedRef = useRef(false)
   const movedHomeRef = useRef(false)
 
   const onHomeDown = (e) => {
@@ -263,12 +263,13 @@ export default function PreviewCanvas(){
     }
 
     // 🛑 stop recorder
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+    if (recorderRef.current?.stop) {
       try {
         recorderRef.current.stop()
       } catch (e) {
         console.warn("recorder stop error", e)
       }
+      recorderRef.current = null   // 🔥 ADD THIS
     }
 
     // 🛑 stop camera stream
@@ -278,14 +279,11 @@ export default function PreviewCanvas(){
     }
 
     // 🛑 stop HTML video playback (uploaded videos)
-    if (mediaRef.current && mediaRef.current.tagName === "VIDEO") {
+    if (mediaRef.current) {
       try {
-        mediaRef.current.pause()
-        mediaRef.current.currentTime = 0
+        mediaRef.current.pause?.()
         mediaRef.current.src = ""
-      } catch (e) {
-        console.warn("video cleanup error", e)
-      }
+      } catch {}
     }
 
     // 🧼 reset refs
@@ -304,17 +302,11 @@ export default function PreviewCanvas(){
     // stop everything
     cleanupMedia()
 
-    // stop recorder if active
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      try {
-        recorderRef.current.stop()
-      } catch {}
-    }
-
     // clear canvas
     const canvas = canvasRef.current
-    if (canvas) {
-      const ctx = canvas.getContext("2d")
+    const ctx = canvas?.getContext("2d")
+
+    if (ctx) {
       ctx.clearRect(0, 0, canvas.width, canvas.height)
     }
 
@@ -442,11 +434,13 @@ export default function PreviewCanvas(){
         vid.muted = false
         vid.play()
       }
-      window.onclick = null
-      window.onclick = () => {
+      const unlockAudio = () => {
         vid.muted = false
         vid.play()
+        window.removeEventListener("click", unlockAudio)
       }
+
+      window.addEventListener("click", unlockAudio)
     }
 
     vid.onerror = () => {
@@ -476,6 +470,8 @@ export default function PreviewCanvas(){
 
       media.currentTime = 0
       await media.play()
+      await media.play()
+      await media.captureStream() // forces activation
       await forceRenderFrame()
       
       let lastProgress = 0
@@ -535,11 +531,9 @@ export default function PreviewCanvas(){
     try {
       if (media.paused) {
         await media.play()
-        console.log("▶️ PLAY")
         setFlash("play")
       } else {
         media.pause()
-        console.log("⏸ PAUSE", media.paused)
         setFlash("pause")
       }
     } catch (e) {
@@ -556,6 +550,7 @@ export default function PreviewCanvas(){
     if(!state.category || !state.control) return
 
     editingRef.current = true
+    movedRef.current = false
 
     startRef.current = {
       x: e.clientX,
@@ -571,6 +566,11 @@ export default function PreviewCanvas(){
 
     const dx = e.clientX - startRef.current.x
     const dy = e.clientY - startRef.current.y
+
+    // 🔥 detect actual drag
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      movedRef.current = true
+    }
 
     let delta = 0
 
@@ -734,7 +734,7 @@ export default function PreviewCanvas(){
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
         onClick={() => {
-          if (editingRef.current) return
+          if (movedRef.current) return  // prevents drag-triggered click
           togglePlay()
         }}
         style={{
@@ -852,7 +852,7 @@ export default function PreviewCanvas(){
                 cancelledRef.current = true
 
                 // 🛑 cancel export
-                if (recorderRef.current && recorderRef.current.state !== "inactive") {
+                if (recorderRef.current?.stop) {
                   recorderRef.current.stop()
                 }
 

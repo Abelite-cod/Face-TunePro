@@ -57,9 +57,12 @@ export function runPipeline(media, canvas, state) {
   function stop() {
     running = false
 
-    if (rafId) cancelAnimationFrame(rafId)
+    if (rafId) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
 
-    // 🔥 HARD RESET (CRITICAL)
+    // 🔥 reset globals
     prevLandmarks = null
     window.__landmarks = null
     window.__lastDetect = null
@@ -68,9 +71,10 @@ export function runPipeline(media, canvas, state) {
   }
 
   async function loop() {
-    if (!running) return
 
     const current = media
+
+    if (!running) return
 
     if (!current) {
       rafId = requestAnimationFrame(loop)
@@ -86,8 +90,16 @@ export function runPipeline(media, canvas, state) {
       return
     }
 
-    const w = current.videoWidth || current.naturalWidth
-    const h = current.videoHeight || current.naturalHeight
+    let w = 0
+    let h = 0
+
+    if (current.tagName === "VIDEO") {
+      w = current.videoWidth
+      h = current.videoHeight
+    } else {
+      w = current.naturalWidth
+      h = current.naturalHeight
+    }
 
     if (!w || !h) {
       rafId = requestAnimationFrame(loop)
@@ -115,6 +127,8 @@ export function runPipeline(media, canvas, state) {
         window.__detecting = true
 
         const detected = await getLandmarks(current)
+
+        if (!running) return
 
         if (detected) {
           window.__landmarks = detected
@@ -156,10 +170,16 @@ export function runPipeline(media, canvas, state) {
     const filterControls = cachedControls.filter
 
     // ✅ IMPORTANT: pass smooth, not raw landmarks
-    renderFrame(gl, current, smooth, modified, {
-      ...enhanceControls,
-      ...filterControls
-    })
+    try {
+      renderFrame(gl, current, smooth, modified, {
+        ...enhanceControls,
+        ...filterControls
+      })
+    } catch (e) {
+      // 🛑 prevents texImage2D crash loop
+      rafId = requestAnimationFrame(loop)
+      return
+    }
 
     gl.flush()
 

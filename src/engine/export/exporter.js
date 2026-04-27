@@ -105,7 +105,7 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
   let audioEncoder = null
   let audioCtx = null
   let workletNode = null
-
+  let stopped = false
   // 🔥 SAMPLE-ACCURATE CLOCK
   let audioTimestamp = 0
 
@@ -114,7 +114,7 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
     audioCtx = new AudioContext({ sampleRate: 48000 })
 
-    await audioCtx.audioWorklet.addModule("/src/engine/export/audioProcessor.js")
+    await audioCtx.audioWorklet.addModule("/audioProcessor.js")
 
     const source = audioCtx.createMediaStreamSource(stream)
     workletNode = new AudioWorkletNode(audioCtx, "pcm-processor")
@@ -135,6 +135,8 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     })
 
     workletNode.port.onmessage = (e) => {
+      if (stopped) return 
+
       const channels = e.data
 
       const frame = new AudioData({
@@ -201,12 +203,25 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
   const stop = async () => {
     running = false
+    stopped = true
+    // 🛑 STOP AUDIO FIRST (critical)
+    if (workletNode) {
+      workletNode.port.onmessage = null
+      try { workletNode.disconnect() } catch {}
+    }
 
+    if (audioCtx) {
+      try { await audioCtx.close() } catch {}
+    }
+
+    // small delay to let pipeline drain
     await new Promise(r => setTimeout(r, 50))
 
+    // 🧼 flush encoders AFTER stopping input
     await videoEncoder.flush()
     if (audioEncoder) await audioEncoder.flush()
 
+    // ✅ NOW finalize safely
     muxer.finalize()
 
     const buffer = target.buffer
@@ -221,12 +236,8 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
     setTimeout(() => URL.revokeObjectURL(url), 2000)
 
-    // cleanup
-    if (audioCtx) audioCtx.close()
-
     onStop()
   }
-
 
   /* =========================
      📊 PROGRESS TRACKING
