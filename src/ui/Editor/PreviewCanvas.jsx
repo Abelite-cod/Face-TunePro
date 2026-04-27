@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useEditor } from "../../state/editorState"
 import { initFaceMesh, getLandmarks } from "../../engine/vision/facemesh"
 import { runPipeline } from "../../engine/pipeline/pipeline.js"
-import { downloadImage, recordCanvasVideo } from "../../engine/export/exporter"
+import { downloadImage, recordCanvasVideo, fallbackRecord } from "../../engine/export/exporter"
 
 
 
@@ -452,6 +452,18 @@ export default function PreviewCanvas(){
   /* ---------- DOWNLOAD ---------- */
 
   const download = async () => {
+
+    function supportsWebCodecs() {
+      return (
+        "VideoEncoder" in window &&
+        "AudioEncoder" in window
+      )
+    }
+    
+    function isIOS() {
+      return /iPhone|iPad|iPod/i.test(navigator.userAgent)
+    }
+
     if (recording) return
 
     const canvas = canvasRef.current
@@ -470,14 +482,10 @@ export default function PreviewCanvas(){
 
       media.currentTime = 0
       await media.play()
-      await media.play()
-      await media.captureStream() // forces activation
       await forceRenderFrame()
       
       let lastProgress = 0
-      recorderRef.current = recordCanvasVideo(canvas, media, {
-        withAudio: true,
-
+      const handlers = {
         onStart: (state) => {
           if (state) {
             setExportStatus(state)
@@ -487,8 +495,6 @@ export default function PreviewCanvas(){
           setRecording(true)
           setExportStatus("recording")
         },
-
-        
 
         onProgress: (p) => {
           const next = Math.round(p * 100)
@@ -511,10 +517,28 @@ export default function PreviewCanvas(){
             setExportStatus(null)
             return
           }
+
           setTimeout(() => setExportStatus(null), 1500)
         }
-      })
+      }
 
+
+      // 🔥 HYBRID SWITCH
+      if (!isIOS() && supportsWebCodecs()) {
+        // 🟢 Desktop / Android
+        recorderRef.current = recordCanvasVideo(canvas, media, handlers)
+      } else {
+        console.warn("🍎 Using iPhone fallback")
+
+        try {
+          fallbackRecord(canvas, media, handlers)
+        } catch (e) {
+          console.error("Fallback crashed:", e)
+          setExportStatus(null)
+        }
+
+        recorderRef.current = null
+      }
     } else {
       downloadImage(canvas)
       setExportStatus("done")

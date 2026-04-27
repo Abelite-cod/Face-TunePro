@@ -5,6 +5,78 @@ import { Muxer, ArrayBufferTarget } from "mp4-muxer"
    📸 IMAGE EXPORT
 ========================= */
 
+export function fallbackRecord(canvas, media, { onStart, onStop, onProgress } = {}) {
+  let recorder = null
+
+  try {
+    const stream = canvas.captureStream(30)
+
+    recorder = new MediaRecorder(stream)
+
+    const chunks = []
+
+    recorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        chunks.push(e.data)
+      }
+    }
+
+    recorder.onstart = () => {
+      console.log("🎬 Fallback recording started")
+      onStart?.("recording")
+    }
+
+    recorder.onstop = () => {
+      console.log("🛑 Fallback recording stopped")
+
+      const blob = new Blob(chunks)
+      const url = URL.createObjectURL(blob)
+
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "face-edit.mov"
+      a.click()
+
+      URL.revokeObjectURL(url)
+
+      onStop?.()
+    }
+
+    recorder.start()
+
+    // ✅ ONLY ONE PROGRESS SYSTEM
+    if (media && media.tagName === "VIDEO") {
+      const duration = media.duration || 0
+
+      const interval = setInterval(() => {
+        if (!duration) return
+
+        const p = media.currentTime / duration
+        onProgress?.(p)
+
+        if (p >= 0.999) {
+          clearInterval(interval)
+          if (recorder && recorder.state !== "inactive") {
+            recorder.stop()
+          }
+        }
+      }, 100)
+    }
+
+  } catch (err) {
+    console.error("❌ fallbackRecord failed:", err)
+    onStop?.()
+  }
+
+  return {
+    stop: () => {
+      if (recorder && recorder.state !== "inactive") {
+        recorder.stop()
+      }
+    }
+  }
+}
+
 export function downloadImage(canvas) {
   if (!canvas) {
     console.warn("❌ no canvas")
