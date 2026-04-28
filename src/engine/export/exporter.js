@@ -5,14 +5,37 @@ import { Muxer, ArrayBufferTarget } from "mp4-muxer"
    📸 IMAGE EXPORT
 ========================= */
 
-export function fallbackRecord(canvas, media, { onStart, onStop, onProgress } = {}) {
+export async function fallbackRecord(canvas, media, { onStart, onStop, onProgress } = {}) {
   let recorder = null
 
   try {
-    const stream = canvas.captureStream(30)
+    // 🎥 Canvas video stream
+    const canvasStream = canvas.captureStream(30)
 
-    recorder = new MediaRecorder(stream)
+    // 🔊 Setup audio
+    const audioCtx = new AudioContext()
+    await audioCtx.resume()
 
+    let source
+    try {
+      source = audioCtx.createMediaElementSource(media)
+    } catch (e) {
+      console.warn("⚠️ media source already connected", e)
+    }
+    const dest = audioCtx.createMediaStreamDestination()
+
+    if (source) {
+      source.connect(dest)
+      source.connect(audioCtx.destination)
+    }
+    // 🎯 Merge video + audio
+    const combinedStream = new MediaStream([
+      ...canvasStream.getVideoTracks(),
+      ...dest.stream.getAudioTracks()
+    ])
+
+    // 🎬 Keep your original recorder behavior (no forced mp4)
+    recorder = new MediaRecorder(combinedStream)
     const chunks = []
 
     recorder.ondataavailable = (e) => {
@@ -36,8 +59,10 @@ export function fallbackRecord(canvas, media, { onStart, onStop, onProgress } = 
       a.href = url
       a.download = "face-edit.mov"
       a.click()
-
-      URL.revokeObjectURL(url)
+      try {
+        audioCtx.close()
+      } catch {}
+      setTimeout(() => URL.revokeObjectURL(url), 2000)
 
       onStop?.()
     }
@@ -131,8 +156,7 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
   const target = new ArrayBufferTarget()
 
-  // 🔥 GLOBAL CLOCK (shared)
-  const startTime = performance.now()
+  
 
   const muxer = new Muxer({
     target,
@@ -165,7 +189,7 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     codec: "avc1.42001f",
     width,
     height,
-    bitrate: 5_000_000,
+    bitrate: 3_000_000,
     framerate: fps
   })
 
@@ -207,7 +231,7 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     })
 
     workletNode.port.onmessage = (e) => {
-      if (stopped) return 
+      if (stopped) return
 
       const channels = e.data
 
@@ -216,14 +240,13 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
         sampleRate: 48000,
         numberOfFrames: channels[0].length,
         numberOfChannels: channels.length,
-        timestamp: audioTimestamp, // ✅ always starts at 0
+        timestamp: audioTimestamp,
         data: interleave(channels)
       })
 
       audioEncoder.encode(frame)
       frame.close()
 
-      // advance timestamp correctly (microseconds)
       audioTimestamp += (channels[0].length / 48000) * 1_000_000
     }
 
@@ -233,29 +256,38 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
 
   /* =========================
-     🎥 VIDEO LOOP
+    🎥 VIDEO LOOP
   ========================= */
 
   let running = true
-  let lastTime = 0
-  const frameInterval = 1000 / fps
+  let encoding = false
+
+  const frameDuration = 1000 / fps
+
+  // 🔥 stable realtime clock
+  const exportStart = performance.now()
 
   onStart()
 
-  const draw = async (now) => {
+  const draw = async () => {
     if (!running) return
-
-    if (now - lastTime < frameInterval) {
-      requestAnimationFrame(draw)
+    if (encoding) {
+      setTimeout(draw, frameDuration)
       return
     }
 
-    lastTime = now
+    encoding = true
+
+    const frameStart = performance.now()
 
     const bitmap = await createImageBitmap(canvas)
 
+    const timestamp = Math.round(
+      (performance.now() - exportStart) * 1000
+    )
+
     const videoFrame = new VideoFrame(bitmap, {
-      timestamp: (now - startTime) * 1000 // microseconds
+      timestamp
     })
 
     videoEncoder.encode(videoFrame)
@@ -263,12 +295,15 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     videoFrame.close()
     bitmap.close()
 
-    requestAnimationFrame(draw)
+    // 🔥 maintain stable pacing
+    const elapsed = performance.now() - frameStart
+    const delay = Math.max(0, frameDuration - elapsed)
+
+    encoding = false
+    setTimeout(draw, delay)
   }
 
-  requestAnimationFrame(draw)
-
-
+  draw()
   /* =========================
      🛑 STOP
   ========================= */
