@@ -2,6 +2,13 @@ import * as faceLandmarksDetection from "@tensorflow-models/face-landmarks-detec
 import "@tensorflow/tfjs-backend-webgl"
 import * as tf from "@tensorflow/tfjs"
 
+const offscreen = document.createElement("canvas")
+
+const ctx = offscreen.getContext("2d", {
+  willReadFrequently: false
+})
+
+
 let detector = null
 let initializing = null // ✅ prevents recursion
 
@@ -14,14 +21,16 @@ export async function initFaceMesh() {
 
   initializing = (async () => {
 
-    await tf.setBackend("webgl")
-    await tf.ready()
+    if (tf.getBackend() !== "webgl") {
+      await tf.setBackend("webgl")
+    }
 
+    await tf.ready()
     detector = await faceLandmarksDetection.createDetector(
       faceLandmarksDetection.SupportedModels.MediaPipeFaceMesh,
       {
         runtime: "tfjs",
-        refineLandmarks: true,
+        refineLandmarks: false,
         maxFaces: 1
       }
     )
@@ -43,15 +52,20 @@ export async function getLandmarks(media) {
     return null
   }
 
-  const width = media.videoWidth || media.width
-  const height = media.videoHeight || media.height
+  const width =
+    media.videoWidth ||
+    media.naturalWidth ||
+    media.width
+
+  const height =
+    media.videoHeight ||
+    media.naturalHeight ||
+    media.height
 
   if (!width || !height) return null
 
   try {
-    const offscreen = document.createElement("canvas")
-    const ctx = offscreen.getContext("2d")
-
+    
     offscreen.width = width
     offscreen.height = height
 
@@ -69,4 +83,4 @@ export async function getLandmarks(media) {
     console.error("❌ detection error", e)
     return null
   }
-}
+} 

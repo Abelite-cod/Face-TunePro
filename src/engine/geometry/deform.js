@@ -135,8 +135,8 @@ export function deform(landmarks, settings) {
       // 1️⃣ thickness (stable base)
       dy = dy * (1 + thick * 0.6 * f)
 
-      // 2️⃣ lift
-      const DEBUG_MULTIPLIER = 5
+      // 2️⃣ lif
+      const DEBUG_MULTIPLIER = 1
       dy -= lift * 4.5 * f * DEBUG_MULTIPLIER
 
       // 3️⃣ shape curve (natural arch)
@@ -149,7 +149,7 @@ export function deform(landmarks, settings) {
       output[i].x = c.x + nx
       output[i].y = c.y + ny
       // lift
-      output[i].y -= lift * 6 * f * DEBUG_MULTIPLIER
+      output[i].y -= lift * 2.0 * f * DEBUG_MULTIPLIER
     }
 
     // 5️⃣ MIRROR (critical for stability)
@@ -335,8 +335,11 @@ function applyNoseWidth(points, indices, value) {
   for (let i of indices) {
     const dx = points[i].x - c.x
 
-    const influence = Math.min(1, Math.abs(dx) * 0.02)
-    const localScale = 1 + value * 0.2 * influence
+    const influence = Math.max(
+      0,
+      1 - Math.abs(dx) / 35
+    )
+    const localScale = 1 + value * 0.08 * influence
 
     points[i].x = c.x + dx * localScale
   }
@@ -350,10 +353,18 @@ function applyNoseNarrow(points, indices, value) {
     y: points[168].y
   }
 
-  const scale = 1 - value * 0.3
+  const scale = 1 - value * 0.12
+  const maxShift = 6
 
   for (let i of indices) {
-    const dx = points[i].x - c.x
+
+    let dx = points[i].x - c.x
+
+    dx = Math.max(
+      -maxShift,
+      Math.min(maxShift, dx)
+    )
+
     points[i].x = c.x + dx * scale
   }
 }
@@ -365,7 +376,7 @@ function applyNoseLift(points, indices, value) {
 
 function applyNoseTip(points, indices, value) {
   if (!value) return
-  for (let i of indices) points[i].y -= value * 3.0
+  for (let i of indices) points[i].y -= value * 0.8
 }
 
 /* =========================
@@ -383,8 +394,8 @@ function applyLipSize(points, indices, value) {
 
     const f = falloff(dx, dy, 0.04)
 
-    points[i].x = c.x + dx * (1 + value * 0.4 * f)
-    points[i].y = c.y + dy * (1 + value * 0.5 * f)
+    points[i].x = c.x + dx * (1 + value * 0.35 * f)
+    points[i].y = c.y + dy * (1 + value * 0.45 * f)
   }
 }
 
@@ -397,7 +408,7 @@ function applyLipWidth(points, indices, value) {
     const dx = points[i].x - c.x
     const f = falloff(dx, 0, 0.02)
 
-    points[i].x = c.x + dx * (1 + value * 0.5 * f)
+    points[i].x = c.x + dx * (1 + value * 0.08 * f)
   }
 }
 
@@ -410,7 +421,7 @@ function applyLipHeight(points, indices, value) {
     const dy = points[i].y - c.y
     const f = falloff(0, dy, 0.02)
 
-    points[i].y = c.y + dy * (1 + value * 0.6 * f)
+    points[i].y = c.y + dy * (1 + value * 0.25 * f)
   }
 }
 /* =========================
@@ -518,9 +529,12 @@ function applyFaceWidth(points, indices, value) {
   for (let i of indices) {
     const dx = points[i].x - c.x
 
-    const influence = Math.abs(dx) * 0.008
-    const strength = value * 0.25 * influence
+    const influence = Math.min(
+      1,
+      Math.abs(dx) * 0.004
+    )
 
+    const strength = value * 0.12 * influence
     points[i].x += dx * strength
   }
 }

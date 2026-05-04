@@ -4,6 +4,7 @@ import { renderFrame } from "../gpu/renderer"
 
 // ✅ NEW: smoothing state
 let prevLandmarks = null
+let lastDetectTime = 0
 
 // ✅ NEW: smoothing function
 function smoothLandmarks(current) {
@@ -12,7 +13,7 @@ function smoothLandmarks(current) {
     return current
   }
 
-  const alpha = 0.7 // tweak if needed (0.6–0.8)
+  const alpha = 0.78 // tweak if needed (0.6–0.8)
 
   const smoothed = current.map((p, i) => ({
     x: prevLandmarks[i].x * alpha + p.x * (1 - alpha),
@@ -121,28 +122,41 @@ export function runPipeline(media, canvas, state) {
     const DETECT_INTERVAL = document.hidden ? 400 : 80
     const isStaticImage = current.tagName === "IMG"
 
-    if (isStaticImage && window.__landmarks) {
-      // reuse
-    } if (!window.__detecting) {
+    const now = performance.now()
+
+    if (
+      !isStaticImage ||
+      !window.__landmarks
+    ) {
+
+      if (
+        !window.__detecting &&
+        now - lastDetectTime > DETECT_INTERVAL
+      ) {
+
         window.__detecting = true
 
-        const detected = await getLandmarks(current)
+        try {
 
-        if (!running) return
+          const detected = await getLandmarks(current)
 
-        if (detected) {
-          window.__landmarks = detected
+          if (!running) return
+
+          if (detected) {
+            window.__landmarks = detected
+          }
+
+          lastDetectTime = now
+
+        } finally {
+          window.__detecting = false
         }
-
-        window.__lastDetect = Date.now()
-        window.__detecting = false
       }
-
+    }
     landmarks = window.__landmarks
 
     if (!landmarks || landmarks.length === 0) {
       renderFrame(gl, current, null, null, {})
-      gl.flush()
       rafId = requestAnimationFrame(loop)
       return
     }
@@ -181,7 +195,7 @@ export function runPipeline(media, canvas, state) {
       return
     }
 
-    gl.flush()
+    
 
     rafId = requestAnimationFrame(loop)
   }

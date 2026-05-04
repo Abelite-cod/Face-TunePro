@@ -64,7 +64,7 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
   
   gl.useProgram(program)
 
-  const strength = modified ? 3.0 : 0.0
+  const strength = modified ? 1.2 : 0.0
   gl.uniform1f(uStrengthLoc, strength)
 
   // filters
@@ -112,11 +112,9 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
 
       // EYEBROWS
       // EYEBROWS (BOOSTED FOR VISIBILITY)
+            // EYEBROWS
       70,63,105,66,107,55,65,52,53,46,193,189,
-      70,63,105,66,107,55,65,52,53,46,193,189, // duplicate left
-
       336,296,334,293,300,285,295,282,283,276,417,413,
-      336,296,334,293,300,285,295,282,283,276,417,413, // duplicate right
     ]
 
     const pick = (points) => {
@@ -149,5 +147,5 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
   gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0)
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
-  gl.finish() // ✅ ensure GPU completes rendering
+
 }

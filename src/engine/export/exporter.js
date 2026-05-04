@@ -1,5 +1,7 @@
 // /src/engine/export/exporter.js
 import { Muxer, ArrayBufferTarget } from "mp4-muxer"
+import { renderFrame } from "../gpu/renderer"
+import { muxAudio } from "./muxAudio"
 
 /* =========================
    📸 IMAGE EXPORT
@@ -129,10 +131,13 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
   const width = canvas.width
   const height = canvas.height
 
+  const gl =
+    canvas.getContext("webgl") ||
+    canvas.getContext("webgl2")
+
   const target = new ArrayBufferTarget()
 
-  // 🔥 GLOBAL CLOCK (shared)
-  const startTime = performance.now()
+  
 
   const muxer = new Muxer({
     target,
@@ -140,11 +145,6 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
       codec: "avc",
       width,
       height
-    },
-    audio: {
-      codec: "aac",
-      sampleRate: 48000,
-      numberOfChannels: 2
     },
     fastStart: "in-memory",
 
@@ -174,88 +174,43 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
      🔊 AUDIO SETUP
   ========================= */
 
-  let audioEncoder = null
-  let audioCtx = null
-  let workletNode = null
-  let stopped = false
-  // 🔥 SAMPLE-ACCURATE CLOCK
-  let audioTimestamp = 0
-
-  try {
-    const stream = media.captureStream()
-
-    audioCtx = new AudioContext({ sampleRate: 48000 })
-
-    await audioCtx.audioWorklet.addModule("/audioProcessor.js")
-
-    const source = audioCtx.createMediaStreamSource(stream)
-    workletNode = new AudioWorkletNode(audioCtx, "pcm-processor")
-
-    source.connect(workletNode)
-    workletNode.connect(audioCtx.destination)
-
-    audioEncoder = new AudioEncoder({
-      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-      error: (e) => console.error("audio encoder error:", e)
-    })
-
-    audioEncoder.configure({
-      codec: "mp4a.40.2",
-      sampleRate: 48000,
-      numberOfChannels: 2,
-      bitrate: 128000
-    })
-
-    workletNode.port.onmessage = (e) => {
-      if (stopped) return 
-
-      const channels = e.data
-
-      const frame = new AudioData({
-        format: "f32",
-        sampleRate: 48000,
-        numberOfFrames: channels[0].length,
-        numberOfChannels: channels.length,
-        timestamp: audioTimestamp, // ✅ always starts at 0
-        data: interleave(channels)
-      })
-
-      audioEncoder.encode(frame)
-      frame.close()
-
-      // advance timestamp correctly (microseconds)
-      audioTimestamp += (channels[0].length / 48000) * 1_000_000
-    }
-
-  } catch (e) {
-    console.warn("⚠️ audio pipeline failed, continuing without audio", e)
-  }
-
+  
 
   /* =========================
      🎥 VIDEO LOOP
   ========================= */
 
-  let running = true
-  let lastTime = 0
-  const frameInterval = 1000 / fps
+ 
 
   onStart()
 
-  const draw = async (now) => {
-    if (!running) return
+  const totalFrames = Math.floor(media.duration * fps)
 
-    if (now - lastTime < frameInterval) {
-      requestAnimationFrame(draw)
-      return
-    }
+  for (let frame = 0; frame < totalFrames; frame++) {
 
-    lastTime = now
+    media.currentTime = frame / fps
+
+    await new Promise((resolve) => {
+      const seek = () => {
+        media.removeEventListener("seeked", seek)
+        resolve()
+      }
+
+      media.addEventListener("seeked", seek)
+    })
+
+    renderFrame(
+      gl,
+      media,
+      window.__landmarks,
+      window.__landmarks,
+      {}
+    )
 
     const bitmap = await createImageBitmap(canvas)
 
     const videoFrame = new VideoFrame(bitmap, {
-      timestamp: (now - startTime) * 1000 // microseconds
+      timestamp: frame * (1_000_000 / fps)
     })
 
     videoEncoder.encode(videoFrame)
@@ -263,43 +218,35 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     videoFrame.close()
     bitmap.close()
 
-    requestAnimationFrame(draw)
+    onProgress?.(frame / totalFrames)
+    
   }
-
-  requestAnimationFrame(draw)
+  await stop()
 
 
   /* =========================
      🛑 STOP
   ========================= */
 
-  const stop = async () => {
-    running = false
-    stopped = true
-    // 🛑 STOP AUDIO FIRST (critical)
-    if (workletNode) {
-      workletNode.port.onmessage = null
-      try { workletNode.disconnect() } catch {}
-    }
-
-    if (audioCtx) {
-      try { await audioCtx.close() } catch {}
-    }
-
+  async function stop() {
+    
+    
     // small delay to let pipeline drain
     await new Promise(r => setTimeout(r, 50))
 
     // 🧼 flush encoders AFTER stopping input
     await videoEncoder.flush()
-    if (audioEncoder) await audioEncoder.flush()
-
+    
     // ✅ NOW finalize safely
     muxer.finalize()
 
     const buffer = target.buffer
     const blob = new Blob([buffer], { type: "video/mp4" })
-
-    const url = URL.createObjectURL(blob)
+    const finalBlob =
+      media.tagName === "VIDEO"
+        ? await muxAudio(blob, media)
+        : blob
+    const url = URL.createObjectURL(finalBlob)
 
     const a = document.createElement("a")
     a.href = url
@@ -310,42 +257,5 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
     onStop()
   }
-
-  /* =========================
-     📊 PROGRESS TRACKING
-  ========================= */
-
-  if (media.tagName === "VIDEO") {
-    const duration = media.duration
-
-    const interval = setInterval(() => {
-      const progress = media.currentTime / duration
-      onProgress(progress)
-
-      if (progress >= 0.999) {
-        clearInterval(interval)
-        stop()
-      }
-    }, 100)
-  }
-
-  return { stop }
 }
-
-
-/* =========================
-   🔧 INTERLEAVE AUDIO
-========================= */
-
-function interleave(channels) {
-  const length = channels[0].length
-  const result = new Float32Array(length * channels.length)
-
-  for (let i = 0; i < length; i++) {
-    for (let ch = 0; ch < channels.length; ch++) {
-      result[i * channels.length + ch] = channels[ch][i]
-    }
-  }
-
-  return result
-}
+  

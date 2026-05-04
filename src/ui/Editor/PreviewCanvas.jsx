@@ -417,7 +417,7 @@ export default function PreviewCanvas(){
     const vid = document.createElement("video")
     vid.src = URL.createObjectURL(file)
     vid.loop = false
-    vid.muted = true
+    vid.muted = false
     vid.playsInline = true
     vid.autoplay = true
 
@@ -468,10 +468,12 @@ export default function PreviewCanvas(){
 
     const canvas = canvasRef.current
     const media = mediaRef.current
+    media.muted = false
 
     if (!canvas || !media) return
 
     setExportStatus("preparing")
+    setProgress(0)
 
     await forceRenderFrame()
 
