@@ -294,3 +294,54 @@ cursor:pointer;
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* =========================
+   🎚️ VIDEO SCRUBBER
+========================= */
+
+/* Track — already styled inline via background gradient */
+input[type="range"].scrubber {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+  background: transparent; /* gradient set inline */
+}
+
+/* Thumb — webkit */
+input[type="range"].scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.90);
+  box-shadow: 0 0 4px rgba(0,0,0,0.5);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+input[type="range"].scrubber::-webkit-slider-thumb:hover {
+  transform: scale(1.35);
+}
+
+/* Thumb — Firefox */
+input[type="range"].scrubber::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.90);
+  box-shadow: 0 0 4px rgba(0,0,0,0.5);
+  cursor: pointer;
+}
+
+/* Track fill — Firefox */
+input[type="range"].scrubber::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.18);
+}

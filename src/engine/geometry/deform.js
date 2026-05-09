@@ -1,194 +1,22 @@
-export function deform(landmarks, settings) {
-
-
-
+/**
+ * deform(landmarks, state)
+ *
+ * Single-pass deformation: ALL categories are applied in ONE call.
+ * Each category reads from the ORIGINAL landmarks and writes to output.
+ * No category ever reads another category's output — no cumulative drift.
+ */
+export function deform(landmarks, state) {
   if (!landmarks) return null
 
-  const category = settings?.category
-  const controls = settings?.getAll?.(category) || {}
-
-  const size = controls.size || 0
-  const distance = controls.distance || 0
-  const width = controls.width || 0
-  const height = controls.height || 0
-  const tilt = controls.tilt || 0
-  const narrow = controls.narrow || 0
-  const lift = controls.lift || 0
-  const tip = controls.tip || 0
-  const chinValue = controls.chin || 0
-  const thick = controls.thick || 0
-  const shape = controls.shape || 0
-  const smile = controls.smile || 0
-  
-
-  
-
-  if (!category) return landmarks
-
+  // Clone original once — every category reads from `landmarks`, writes to `output`
   const output = landmarks.map(p => ({ x: p.x, y: p.y }))
 
-  /* =========================
-     EYES
-  ========================= */
-
-  if (category === "eyes") {
-    const leftEye = [33,133,160,159,158,144,145,153]
-    const rightEye = [362,263,387,386,385,373,374,380]
-
-    const faceCenter = getFaceCenter(landmarks)
-
-    applyEyeSize(output, leftEye, size)
-    applyEyeSize(output, rightEye, size)
-
-    applyEyeWidth(output, leftEye, width)
-    applyEyeWidth(output, rightEye, width)
-
-    applyEyeHeight(output, leftEye, height)
-    applyEyeHeight(output, rightEye, height)
-
-    applyEyeTilt(output, leftEye, tilt, "left")
-    applyEyeTilt(output, rightEye, tilt, "right")
-
-    applyEyeDistance(output, leftEye, faceCenter, distance)
-    applyEyeDistance(output, rightEye, faceCenter, distance)
-  }
-
-  /* =========================
-     NOSE
-  ========================= */
-
-  if (category === "nose") {
-
-    const nose = [
-      1,2,5,4,
-      168,197,195,
-      98,327
-    ] 
-    const noseTip = [1]
-    const noseBridge = [168,197,195]
-    const nostrils = [98,327]
-
-    applyNoseSize(output, nose, size)
-    applyNoseWidth(output, nostrils, width)
-    applyNoseNarrow(output, noseBridge, narrow)
-    applyNoseLift(output, noseTip, lift)
-    applyNoseTip(output, noseTip, tip)
-  }
-
-  /* =========================
-     LIPS
-  ========================= */
-
-  if (category === "lips") {
-    const lips = [
-      61,146,91,181,84,17,314,405,321,375,
-      291,308,324,318,402,317,14,87
-    ]
-
-    applyLipSize(output, lips, size)
-    applyLipWidth(output, lips, width)
-    applyLipHeight(output, lips, height)
-  }
-
-  /* =========================
-     JAW
-  ========================= */
-
-  if (category === "jaw") {
-
-    const jaw = [
-      234,93,132,58,172,136,
-      150,149,176,148,152,
-      377,400,378,379,365,397
-    ]
-
-    const chin = [
-      152,148,176,149,150,
-      377,400,378,379
-    ]
-
-    applyJawWidth(output, jaw, width)
-    applyChin(output, chin, chinValue)
-  }
-
-  /* =========================
-     EYEBROWS (MIRRORED)
-  ========================= */
-
-  if (category === "eyebrows") {
-
-    const left = [70,63,105,66,107,55,65,52,53,46,193,189]
-    const right = [336,296,334,293,300,285,295,282,283,276,417,413]
-
-    const c = getCenter(output, left)
-
-    const angle = tilt * 0.35
-    const cos = Math.cos(angle)
-    const sin = Math.sin(angle)
-
-    for (let i of left) {
-      let dx = output[i].x - c.x
-      let dy = output[i].y - c.y
-
-      const f = falloff(dx, dy, 0.008) // smoother falloff
-
-      // 1️⃣ thickness (stable base)
-      dy = dy * (1 + thick * 0.6 * f)
-
-      // 2️⃣ lif
-      const DEBUG_MULTIPLIER = 1
-      dy -= lift * 4.5 * f * DEBUG_MULTIPLIER
-
-      // 3️⃣ shape curve (natural arch)
-      dy -= dx * dx * shape * 0.0012
-
-      // 4️⃣ rotation (AFTER shape)
-      const nx = dx * cos - dy * sin
-      const ny = dx * sin + dy * cos
-
-      output[i].x = c.x + nx
-      output[i].y = c.y + ny
-      // lift
-      output[i].y -= lift * 2.0 * f * DEBUG_MULTIPLIER
-    }
-
-    // 5️⃣ MIRROR (critical for stability)
-    const fc = getFaceCenter(output)
-
-    for (let i = 0; i < left.length; i++) {
-      const l = left[i]
-      const r = right[i]
-
-      const dx = output[l].x - fc.x
-
-      output[r].x = fc.x - dx
-      output[r].y = output[l].y
-    }
-
-    // 6️⃣ distance AFTER mirror
-    const spacing = distance * 3.5
-
-    for (let i of left) output[i].x -= spacing
-    for (let i of right) output[i].x += spacing
-
-   
-  }
-
-  if (category === "face") {
-
-    const face = [
-      234,93,132,58,172,136,
-      150,149,176,148,152,
-      377,400,378,379,365,397
-    ]
-
-    const mouth = [61,291,0,17]
-
-    applyFaceWidth(output, face, width)
-    applySmile(output, mouth, smile)
-
-    
-  }
+  applyEyes(landmarks, output, state.getAll("eyes"))
+  applyNose(landmarks, output, state.getAll("nose"))
+  applyLips(landmarks, output, state.getAll("lips"))
+  applyJaw(landmarks, output, state.getAll("jaw"))
+  applyEyebrows(landmarks, output, state.getAll("eyebrows"))
+  applyFace(landmarks, output, state.getAll("face"))
 
   return output
 }
@@ -204,25 +32,17 @@ function falloff(dx, dy, k = 0.015) {
 
 function getCenter(points, indices) {
   let cx = 0, cy = 0
-
   for (let i of indices) {
     cx += points[i].x
     cy += points[i].y
   }
-
-  return {
-    x: cx / indices.length,
-    y: cy / indices.length
-  }
+  return { x: cx / indices.length, y: cy / indices.length }
 }
 
 function getFaceCenter(points) {
-  const left = points[33]
-  const right = points[263]
-
   return {
-    x: (left.x + right.x) / 2,
-    y: (left.y + right.y) / 2
+    x: (points[33].x + points[263].x) / 2,
+    y: (points[33].y + points[263].y) / 2
   }
 }
 
@@ -230,233 +50,246 @@ function getFaceCenter(points) {
    EYES
 ========================= */
 
-function applyEyeSize(points, indices, value) {
-  if (!value) return
+function applyEyes(src, out, c) {
+  const size     = c.size     || 0
+  const width    = c.width    || 0
+  const height   = c.height   || 0
+  const tilt     = c.tilt     || 0
+  const distance = c.distance || 0
 
-  const c = getCenter(points, indices)
-  const scale = 1 + value * 0.25
+  if (!size && !width && !height && !tilt && !distance) return
 
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
-    points[i].x = c.x + dx * scale
-    points[i].y = c.y + dy * scale
-  }
+  const leftEye  = [33, 133, 160, 159, 158, 144, 145, 153]
+  const rightEye = [362, 263, 387, 386, 385, 373, 374, 380]
+  const faceCenter = getFaceCenter(src)
+
+  eyeTransform(src, out, leftEye,  size, width, height, tilt, distance, faceCenter, "left")
+  eyeTransform(src, out, rightEye, size, width, height, tilt, distance, faceCenter, "right")
 }
 
-function applyEyeWidth(points, indices, value) {
-  if (!value) return
+function eyeTransform(src, out, indices, size, width, height, tilt, distance, faceCenter, side) {
+  const c = getCenter(src, indices)
 
-  const c = getCenter(points, indices)
-  const scale = 1 + value * 0.25
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    points[i].x = c.x + dx * scale
-  }
-}
-
-function applyEyeHeight(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-  const scale = 1 + value * 0.35
+  const sizeScale   = 1 + size * 0.45
+  const widthScale  = 1 + width * 0.45
+  const heightScale = 1 + height * 0.35
+  const dir         = side === "left" ? 1 : -1
+  const angle       = tilt * 0.5 * dir
+  const cos         = Math.cos(angle)
+  const sin         = Math.sin(angle)
+  const distShift   = distance * 2.5
 
   for (let i of indices) {
-    const dy = points[i].y - c.y
-    points[i].y = c.y + dy * scale
-  }
-}
+    let dx = src[i].x - c.x
+    let dy = src[i].y - c.y
 
-function applyEyeTilt(points, indices, value, side) {
-  if (!value) return
+    // size
+    dx *= sizeScale
+    dy *= sizeScale
 
-  const c = getCenter(points, indices)
-  const dir = side === "left" ? 1 : -1
-  const angle = value * 0.5 * dir
+    // width
+    dx *= widthScale
 
-  const cos = Math.cos(angle)
-  const sin = Math.sin(angle)
+    // height
+    dy *= heightScale
 
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
+    // tilt (rotation around eye center)
+    const rx = dx * cos - dy * sin
+    const ry = dx * sin + dy * cos
+    dx = rx
+    dy = ry
 
-    points[i].x = c.x + dx * cos - dy * sin
-    points[i].y = c.y + dx * sin + dy * cos
-  }
-}
-
-function applyEyeDistance(points, indices, faceCenter, value) {
-  if (!value) return
-
-  const strength = value * 2.0
-
-  for (let i of indices) {
-    points[i].x += (points[i].x < faceCenter.x ? -1 : 1) * strength
+    out[i].x = c.x + dx + (src[i].x < faceCenter.x ? -1 : 1) * distShift
+    out[i].y = c.y + dy
   }
 }
 
 /* =========================
-   NOSE
+   NOSE  (single-pass, tight local)
 ========================= */
 
-function applyNoseSize(points, indices, value) {
-  if (!value) return
+function applyNose(src, out, c) {
+  const size   = c.size   || 0
+  const width  = c.width  || 0
+  const narrow = c.narrow || 0
+  const lift   = c.lift   || 0
+  const tip    = c.tip    || 0
 
-  const c = {
-    x: points[168].x,
-    y: points[168].y
+  if (!size && !width && !narrow && !lift && !tip) return
+
+  // Nose region — carefully bounded
+  const noseAll    = [1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6]
+  const noseTip    = [1, 2, 5, 4, 19, 94]
+  const noseBridge = [168, 197, 195, 6]
+  const nostrils   = [98, 327, 45, 275, 2, 5]
+
+  // Anchor = nose tip landmark
+  const anchor = { x: src[1].x, y: src[1].y }
+
+  // Compute bounding radius of nose region
+  let maxDist = 0
+  for (let i of noseAll) {
+    const dx = src[i].x - anchor.x
+    const dy = src[i].y - anchor.y
+    const d  = Math.sqrt(dx * dx + dy * dy)
+    if (d > maxDist) maxDist = d
+  }
+  if (maxDist < 1) return
+
+  // SIZE — scale all nose points from anchor
+  if (size) {
+    const scale = 1 + size * 0.18
+    for (let i of noseAll) {
+      const dx = src[i].x - anchor.x
+      const dy = src[i].y - anchor.y
+      const d  = Math.sqrt(dx * dx + dy * dy)
+      const f  = Math.max(0, 1 - d / (maxDist * 1.1))
+      out[i].x = anchor.x + dx * (1 + (scale - 1) * f)
+      out[i].y = anchor.y + dy * (1 + (scale - 1) * f)
+    }
   }
 
-  const baseScale = 1 + value * 0.03
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
-
-    const f = falloff(dx, dy, 0.01)
-
-    const scale = 1 + (baseScale - 1) * f
-
-    points[i].x = c.x + dx * scale
-    points[i].y = c.y + dy * scale
-  }
-}
-
-function applyNoseWidth(points, indices, value) {
-  if (!value) return
-
-  const c = {
-    x: points[168].x,
-    y: points[168].y
+  // WIDTH — horizontal scale of nostrils
+  if (width) {
+    const cx = getCenter(src, nostrils).x
+    for (let i of nostrils) {
+      const dx = src[i].x - cx
+      out[i].x = cx + dx * (1 + width * 0.42)
+    }
   }
 
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-
-    const influence = Math.max(
-      0,
-      1 - Math.abs(dx) / 35
-    )
-    const localScale = 1 + value * 0.08 * influence
-
-    points[i].x = c.x + dx * localScale
-  }
-}
-
-function applyNoseNarrow(points, indices, value) {
-  if (!value) return
-
-  const c = {
-    x: points[168].x,
-    y: points[168].y
+  // NARROW — compress bridge horizontally
+  if (narrow) {
+    const cx = getCenter(src, noseBridge).x
+    for (let i of noseBridge) {
+      const dx = src[i].x - cx
+      out[i].x = cx + dx * (1 - narrow * 0.18)
+    }
   }
 
-  const scale = 1 - value * 0.12
-  const maxShift = 6
-
-  for (let i of indices) {
-
-    let dx = points[i].x - c.x
-
-    dx = Math.max(
-      -maxShift,
-      Math.min(maxShift, dx)
-    )
-
-    points[i].x = c.x + dx * scale
+  // LIFT — move entire tip region up/down uniformly
+  if (lift) {
+    for (let i of noseTip) {
+      out[i].y = src[i].y - lift * 1.2
+    }
   }
-}
 
-function applyNoseLift(points, indices, value) {
-  if (!value) return
-  for (let i of indices) points[i].y -= value * 0.8
-}
-
-function applyNoseTip(points, indices, value) {
-  if (!value) return
-  for (let i of indices) points[i].y -= value * 0.8
+  // TIP — rotate tip relative to bridge pivot
+  if (tip) {
+    const pivot = { x: src[1].x, y: src[168].y }
+    for (let i of [1, 2, 4, 5]) {
+      const dy = src[i].y - pivot.y
+      if (dy > 0) {
+        out[i].y = src[i].y + tip * 1.5 * (dy / 20)
+      }
+    }
+  }
 }
 
 /* =========================
-   LIPS
+   LIPS  (single-pass, tight local)
 ========================= */
 
-function applyLipSize(points, indices, value) {
-  if (!value) return
+function applyLips(src, out, c) {
+  const size   = c.size   || 0
+  const width  = c.width  || 0
+  const height = c.height || 0
 
-  const c = getCenter(points, indices)
+  if (!size && !width && !height) return
+
+  const indices = [
+    61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291,
+    308, 324, 318, 402, 317, 14, 87
+  ]
+
+  const center = getCenter(src, indices)
+
+  // Compute bounding extents
+  let maxDist = 0, maxDx = 0, maxDy = 0
+  for (let i of indices) {
+    const dx = src[i].x - center.x
+    const dy = src[i].y - center.y
+    const d  = Math.sqrt(dx * dx + dy * dy)
+    if (d  > maxDist) maxDist = d
+    if (Math.abs(dx) > maxDx) maxDx = Math.abs(dx)
+    if (Math.abs(dy) > maxDy) maxDy = Math.abs(dy)
+  }
+  if (maxDist < 1) return
 
   for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
+    const dx = src[i].x - center.x
+    const dy = src[i].y - center.y
+    const d  = Math.sqrt(dx * dx + dy * dy)
 
-    const f = falloff(dx, dy, 0.04)
+    // Hard falloff — only lip points themselves
+    const f = Math.max(0, 1 - d / (maxDist * 1.05))
 
-    points[i].x = c.x + dx * (1 + value * 0.35 * f)
-    points[i].y = c.y + dy * (1 + value * 0.45 * f)
+    let nx = dx
+    let ny = dy
+
+    // SIZE
+    if (size) {
+      nx = dx * (1 + size * 0.28 * f)
+      ny = dy * (1 + size * 0.32 * f)
+    }
+
+    // WIDTH (outer corners get more)
+    if (width && maxDx > 0) {
+      const fw = Math.abs(dx) / maxDx
+      nx = nx * (1 + width * 0.20 * fw)
+    }
+
+    // HEIGHT (top/bottom edges get more)
+    if (height && maxDy > 0) {
+      const fh = Math.abs(dy) / maxDy
+      ny = ny * (1 + height * 0.33 * fh)
+    }
+
+    out[i].x = center.x + nx
+    out[i].y = center.y + ny
   }
 }
 
-function applyLipWidth(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const f = falloff(dx, 0, 0.02)
-
-    points[i].x = c.x + dx * (1 + value * 0.08 * f)
-  }
-}
-
-function applyLipHeight(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-
-  for (let i of indices) {
-    const dy = points[i].y - c.y
-    const f = falloff(0, dy, 0.02)
-
-    points[i].y = c.y + dy * (1 + value * 0.25 * f)
-  }
-}
 /* =========================
    JAW
 ========================= */
 
-function applyJawWidth(points, indices, value) {
-  if (!value) return
+function applyJaw(src, out, c) {
+  const width    = c.width || 0
+  const chinVal  = c.chin  || 0
 
-  const c = getCenter(points, indices)
+  if (!width && !chinVal) return
 
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
+  const jawIndices = [
+    234, 93, 132, 58, 172, 136,
+    150, 149, 176, 148, 152,
+    377, 400, 378, 379, 365, 397
+  ]
 
-    const f = falloff(dx, dy, 0.01)
+  const chinIndices = [
+    152, 148, 176, 149, 150,
+    377, 400, 378, 379
+  ]
 
-    points[i].x += dx * value * 0.03 * f
+  if (width) {
+    const cj = getCenter(src, jawIndices)
+    for (let i of jawIndices) {
+      const dx = src[i].x - cj.x
+      const dy = src[i].y - cj.y
+      const f  = falloff(dx, dy, 0.01)
+      out[i].x = src[i].x + dx * width * 0.03 * f
+    }
   }
-}
 
-function applyChin(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
-
-    if (dy <= 0) continue
-
-    const f = falloff(dx, dy, 0.3)
-
-    points[i].y += value * 10 * f
+  if (chinVal) {
+    const cc = getCenter(src, chinIndices)
+    for (let i of chinIndices) {
+      const dx = src[i].x - cc.x
+      const dy = src[i].y - cc.y
+      if (dy <= 0) continue
+      const f = falloff(dx, dy, 0.3)
+      out[i].y = src[i].y + chinVal * 10 * f
+    }
   }
 }
 
@@ -464,94 +297,115 @@ function applyChin(points, indices, value) {
    EYEBROWS
 ========================= */
 
-function applyBrowThickness(points, indices, value) {
-  if (!value) return
+function applyEyebrows(src, out, c) {
+  const thick    = c.thick    || 0
+  const lift     = c.lift     || 0
+  const shape    = c.shape    || 0
+  const tilt     = c.tilt     || 0
+  const distance = c.distance || 0
 
-  const c = getCenter(points, indices)
-  const scale = 1 + value * 0.8
+  if (!thick && !lift && !shape && !tilt && !distance) return
 
-  for (let i of indices) {
-    const dy = points[i].y - c.y
-    points[i].y = c.y + dy * scale
+  const left  = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46, 193, 189]
+  const right = [336, 296, 334, 293, 300, 285, 295, 282, 283, 276, 417, 413]
+
+  const cL  = getCenter(src, left)
+  const cR  = getCenter(src, right)
+  const fc  = getFaceCenter(src)
+
+  // Tilt angle — mirrored for right brow
+  const angle    = tilt * 0.35
+  const cosA     = Math.cos(angle)
+  const sinA     = Math.sin(angle)
+  const cosAR    = Math.cos(-angle)   // mirror tilt direction for right brow
+  const sinAR    = Math.sin(-angle)
+
+  // ---- LEFT brow — transform directly from src ----
+  for (let i of left) {
+    let dx = src[i].x - cL.x
+    let dy = src[i].y - cL.y
+
+    const f = falloff(dx, dy, 0.012)
+
+    // thickness
+    dy = dy * (1 + thick * 0.6 * f)
+
+    // lift
+    dy -= lift * 4.5 * f
+
+    // shape curve (arch)
+    dy -= dx * dx * shape * 0.0012
+
+    // tilt rotation
+    const nx = dx * cosA - dy * sinA
+    const ny = dx * sinA + dy * cosA
+
+    out[i].x = cL.x + nx
+    out[i].y = cL.y + ny - lift * 2.0 * f
+  }
+
+  // ---- RIGHT brow — transform directly from src (NOT from out) ----
+  // Mirror the same transforms: flip dx sign for shape/tilt symmetry
+  for (let i of right) {
+    let dx = src[i].x - cR.x
+    let dy = src[i].y - cR.y
+
+    const f = falloff(dx, dy, 0.012)
+
+    // thickness
+    dy = dy * (1 + thick * 0.6 * f)
+
+    // lift (same direction as left)
+    dy -= lift * 4.5 * f
+
+    // shape curve — flip dx for right brow symmetry
+    dy -= (-dx) * (-dx) * shape * 0.0012
+
+    // tilt rotation — mirrored angle
+    const nx = dx * cosAR - dy * sinAR
+    const ny = dx * sinAR + dy * cosAR
+
+    out[i].x = cR.x + nx
+    out[i].y = cR.y + ny - lift * 2.0 * f
+  }
+
+  // ---- distance spacing ----
+  if (distance) {
+    const spacing = distance * 3.5
+    for (let i of left)  out[i].x -= spacing
+    for (let i of right) out[i].x += spacing
   }
 }
 
-function applyBrowLift(points, indices, value) {
-  if (!value) return
-  for (let i of indices) points[i].y -= value * 6.0
-}
+/* =========================
+   FACE
+========================= */
 
-function applyBrowTilt(points, indices, value) {
-  if (!value) return
+function applyFace(src, out, c) {
+  const width = c.width || 0
+  const smile = c.smile || 0
 
-  const c = getCenter(points, indices)
-  const angle = value * 0.6
+  if (!width && !smile) return
 
-  const cos = Math.cos(angle)
-  const sin = Math.sin(angle)
+  const faceIndices = [
+    234, 93, 132, 58, 172, 136,
+    150, 149, 176, 148, 152,
+    377, 400, 378, 379, 365, 397
+  ]
 
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    const dy = points[i].y - c.y
-
-    points[i].x = c.x + dx * cos - dy * sin
-    points[i].y = c.y + dx * sin + dy * cos
+  if (width) {
+    const cf = getCenter(src, faceIndices)
+    for (let i of faceIndices) {
+      const dx = src[i].x - cf.x
+      const influence = Math.min(1, Math.abs(dx) * 0.004)
+      out[i].x = src[i].x + dx * width * 0.08 * influence
+    }
   }
-}
 
-function applyBrowShape(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-    points[i].y -= dx * dx * value * 0.002
+  if (smile) {
+    const strength = smile * 20.0
+    out[61].y = src[61].y - strength
+    out[291].y = src[291].y - strength
+    out[0].y  = src[0].y  - strength * 0.3
   }
-}
-
-function applyBrowDistance(points, left, right, value) {
-  if (!value) return
-
-  const strength = value * 2.0
-
-  for (let i of left) points[i].x -= strength
-  for (let i of right) points[i].x += strength
-}
-
-
-
-function applyFaceWidth(points, indices, value) {
-  if (!value) return
-
-  const c = getCenter(points, indices)
-
-  for (let i of indices) {
-    const dx = points[i].x - c.x
-
-    const influence = Math.min(
-      1,
-      Math.abs(dx) * 0.004
-    )
-
-    const strength = value * 0.12 * influence
-    points[i].x += dx * strength
-  }
-}
-
-function applySmile(points, indices, value) {
-  if (!value) return
-
-  const left = points[61]
-  const right = points[291]
-
-  const strength = value * 3.0
-
-  // corners go up
-  left.y -= strength
-  right.y -= strength
-
-  // center stays more stable
-  const mid = points[0]
-  mid.y -= strength * 0.3
 }

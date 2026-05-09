@@ -2,18 +2,21 @@ import { getLandmarks } from "../vision/facemesh"
 import { deform } from "../geometry/deform"
 import { renderFrame } from "../gpu/renderer"
 
-// ✅ NEW: smoothing state
+// Smoothing state — reset when media changes
 let prevLandmarks = null
 let lastDetectTime = 0
 
-// ✅ NEW: smoothing function
+/**
+ * Temporal smoothing: blends current detection with previous frame.
+ * Eliminates jitter without adding lag.
+ */
 function smoothLandmarks(current) {
-  if (!prevLandmarks) {
+  if (!prevLandmarks || prevLandmarks.length !== current.length) {
     prevLandmarks = current
     return current
   }
 
-  const alpha = 0.78 // tweak if needed (0.6–0.8)
+  const alpha = 0.75 // 0 = no smoothing, 1 = frozen
 
   const smoothed = current.map((p, i) => ({
     x: prevLandmarks[i].x * alpha + p.x * (1 - alpha),
@@ -24,10 +27,9 @@ function smoothLandmarks(current) {
   return smoothed
 }
 
-export function runPipeline(media, canvas, state) {
+export function runPipeline(media, canvas, state, comparingRef = null) {
   let lastSize = { w: 0, h: 0 }
-  let rafId = null
-  let cachedControls = {}
+  let rafId    = null
 
   const gl = canvas.getContext("webgl", {
     preserveDrawingBuffer: true,
@@ -40,15 +42,14 @@ export function runPipeline(media, canvas, state) {
   }
 
   function resizeCanvasToMedia(media) {
-    const w = media.videoWidth || media.naturalWidth
+    const w = media.videoWidth  || media.naturalWidth
     const h = media.videoHeight || media.naturalHeight
 
     if (!w || !h) return
     if (w === lastSize.w && h === lastSize.h) return
 
     lastSize = { w, h }
-
-    canvas.width = w
+    canvas.width  = w
     canvas.height = h
     gl.viewport(0, 0, w, h)
   }
@@ -63,139 +64,95 @@ export function runPipeline(media, canvas, state) {
       rafId = null
     }
 
-    // 🔥 reset globals
-    prevLandmarks = null
-    window.__landmarks = null
-    window.__lastDetect = null
-    window.__detecting = false
-    window.__lastMedia = null
+    // Reset globals
+    prevLandmarks        = null
+    window.__landmarks   = null
+    window.__lastDetect  = null
+    window.__detecting   = false
+    window.__lastMedia   = null
   }
 
   async function loop() {
-
-    const current = media
-
     if (!running) return
 
-    if (!current) {
+    if (!media) {
       rafId = requestAnimationFrame(loop)
       return
     }
 
-    resizeCanvasToMedia(current)
+    resizeCanvasToMedia(media)
 
-    const isVideo = current.tagName === "VIDEO"
+    const isVideo = media.tagName === "VIDEO"
 
-    if (isVideo && current.readyState < 2) {
+    if (isVideo && media.readyState < 2) {
       rafId = requestAnimationFrame(loop)
       return
     }
 
-    let w = 0
-    let h = 0
-
-    if (current.tagName === "VIDEO") {
-      w = current.videoWidth
-      h = current.videoHeight
-    } else {
-      w = current.naturalWidth
-      h = current.naturalHeight
-    }
+    const w = media.videoWidth  || media.naturalWidth
+    const h = media.videoHeight || media.naturalHeight
 
     if (!w || !h) {
       rafId = requestAnimationFrame(loop)
       return
     }
 
-    let landmarks = null
-
-    // ✅ reset detection per media
-    if (!window.__lastMedia || window.__lastMedia !== current) {
-      window.__landmarks = null
-      window.__lastMedia = current
-
-      // ✅ ALSO reset smoothing when media changes
-      prevLandmarks = null
-      window.__detecting = false
+    // Reset detection state when media source changes
+    if (!window.__lastMedia || window.__lastMedia !== media) {
+      window.__landmarks  = null
+      window.__lastMedia  = media
+      prevLandmarks       = null
+      window.__detecting  = false
     }
 
     const DETECT_INTERVAL = document.hidden ? 400 : 80
-    const isStaticImage = current.tagName === "IMG"
+    const isStaticImage   = media.tagName === "IMG"
+    const now             = performance.now()
 
-    const now = performance.now()
-
-    if (
-      !isStaticImage ||
-      !window.__landmarks
-    ) {
-
-      if (
-        !window.__detecting &&
-        now - lastDetectTime > DETECT_INTERVAL
-      ) {
-
+    // Async detection — non-blocking
+    if (!isStaticImage || !window.__landmarks) {
+      if (!window.__detecting && now - lastDetectTime > DETECT_INTERVAL) {
         window.__detecting = true
 
         try {
-
-          const detected = await getLandmarks(current)
-
+          const detected = await getLandmarks(media)
           if (!running) return
-
-          if (detected) {
-            window.__landmarks = detected
-          }
-
+          if (detected) window.__landmarks = detected
           lastDetectTime = now
-
         } finally {
           window.__detecting = false
         }
       }
     }
-    landmarks = window.__landmarks
 
-    if (!landmarks || landmarks.length === 0) {
-      renderFrame(gl, current, null, null, {})
+    const rawLandmarks = window.__landmarks
+
+    if (!rawLandmarks || rawLandmarks.length === 0) {
+      renderFrame(gl, media, null, null, {})
       rafId = requestAnimationFrame(loop)
       return
     }
 
-    // ✅ ✅ ✅ KEY FIX: smooth BEFORE deform
-    const smooth = smoothLandmarks(landmarks)
+    // ✅ Smooth BEFORE deform — eliminates jitter
+    const smooth = smoothLandmarks(rawLandmarks)
 
-    let modified = smooth
+    // ✅ Single-pass deform — skip when user is holding Before/After compare
+    const isComparing = comparingRef?.current === true
+    const modified = isComparing ? smooth : deform(smooth, state)
 
-    const categories = ["eyes","nose","lips","jaw","face","eyebrows"]
+    const enhanceControls = state.getAll("enhance") || {}
+    const filterControls  = state.getAll("filter")  || {}
 
-    for (let category of categories) {
-      modified = deform(modified, {
-        category,
-        getAll: (cat) => state.getAll(cat)
-      })
-    }
-
-    cachedControls = {
-      enhance: state.getAll("enhance") || {},
-      filter: state.getAll("filter") || {}
-    }
-
-    const enhanceControls = cachedControls.enhance
-    const filterControls = cachedControls.filter
-
-    // ✅ IMPORTANT: pass smooth, not raw landmarks
     try {
-      renderFrame(gl, current, smooth, modified, {
+      renderFrame(gl, media, smooth, modified, {
         ...enhanceControls,
         ...filterControls
       })
     } catch (e) {
-      // 🛑 prevents texImage2D crash loop
+      // Prevents texImage2D crash loop
       rafId = requestAnimationFrame(loop)
       return
     }
-
-    
 
     rafId = requestAnimationFrame(loop)
   }

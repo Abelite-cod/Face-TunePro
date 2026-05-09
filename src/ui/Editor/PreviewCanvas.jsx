@@ -36,8 +36,27 @@ export default function PreviewCanvas(){
   const recorderRef = useRef(null)
   const [recording, setRecording] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [videoProgress, setVideoProgress] = useState(0)
+  const [videoDuration, setVideoDuration] = useState(0)
+  const [isUploadedVideo, setIsUploadedVideo] = useState(false)
   const stopPipelineRef = useRef(null)
   const [exportStatus, setExportStatus] = useState(null)
+
+  // Feature 5: Before/After
+  const [comparing, setComparing] = useState(false)
+  const compareTimerRef = useRef(null)
+
+  // Feature 8: Pinch-to-zoom
+  const pinchStartDistRef = useRef(null)
+  const pinchStartScaleRef = useRef(1)
+  const [zoomScale, setZoomScale] = useState(1)
+  const [zoomOffset, setZoomOffset] = useState({ x: 0, y: 0 })
+  const panStartRef = useRef(null)
+  const panStartOffsetRef = useRef({ x: 0, y: 0 })
+  const isPanningRef = useRef(false)
+
+  // Feature 10: Export thumbnail
+  const [exportThumb, setExportThumb] = useState(null)
 // null | "preparing" | "recording" | "done"
   const forceRenderFrame = () => {
     return new Promise((resolve) => {
@@ -103,6 +122,9 @@ export default function PreviewCanvas(){
     transition: "all 0.2s ease"
   }
 
+  // Ref so pipeline reads latest comparing value without restart
+  const comparingRef = useRef(false)
+
   const startPipeline = (media) => {
     if (!engineReady) {
       console.warn("⏳ Engine not ready")
@@ -111,7 +133,6 @@ export default function PreviewCanvas(){
     const canvas = canvasRef.current
     if (!canvas || !media) return
 
-    
     // 🛑 STOP OLD PIPELINE
     if (stopPipelineRef.current) {
       try {
@@ -126,8 +147,8 @@ export default function PreviewCanvas(){
     window.__landmarks = null
     window.__lastDetect = null
 
-    // 🚀 START NEW PIPELINE
-    const stop = runPipeline(media, canvas, state)
+    // 🚀 START NEW PIPELINE (pass comparingRef so pipeline can skip deforms)
+    const stop = runPipeline(media, canvas, state, comparingRef)
 
     // 🛡️ Wrap safely
     stopPipelineRef.current = () => {
@@ -294,6 +315,9 @@ export default function PreviewCanvas(){
     setRecording(false)
     setProgress(0)
     setExportStatus(null)
+    setIsUploadedVideo(false)
+    setVideoProgress(0)
+    setVideoDuration(0)
   }
 
   const goHome = () => {
@@ -429,11 +453,17 @@ export default function PreviewCanvas(){
       startPipeline(vid)
 
       setMediaLoading(false) // ✅ DONE
+      setIsUploadedVideo(true)
+      setVideoDuration(vid.duration || 0)
+      setVideoProgress(0)
 
-      const enableAudio = () => {
-        vid.muted = false
-        vid.play()
-      }
+      // Update scrubber as video plays
+      vid.addEventListener("timeupdate", () => {
+        if (vid.duration) {
+          setVideoProgress(vid.currentTime / vid.duration)
+        }
+      })
+
       const unlockAudio = () => {
         vid.muted = false
         vid.play()
@@ -513,6 +543,7 @@ export default function PreviewCanvas(){
           media.loop = wasLooping
           setRecording(false)
           setProgress(0)
+          setExportThumb(null)
 
           if (cancelledRef.current) {
             cancelledRef.current = false
@@ -528,7 +559,11 @@ export default function PreviewCanvas(){
       // 🔥 HYBRID SWITCH
       if (!isIOS() && supportsWebCodecs()) {
         // 🟢 Desktop / Android
-        recorderRef.current = recordCanvasVideo(canvas, media, handlers)
+        recorderRef.current = recordCanvasVideo(canvas, media, {
+          ...handlers,
+          state,
+          onThumb: (dataUrl) => setExportThumb(dataUrl)
+        })
       } else {
         console.warn("🍎 Using iPhone fallback")
 
@@ -626,30 +661,160 @@ export default function PreviewCanvas(){
     startValueRef.current = state.getValue()
   }
 
-  /* ---------- TOUCH ---------- */
+  /* ---------- TOUCH (with pinch-to-zoom) ---------- */
 
   const onTouchStart = (e) => {
-    if (e.touches.length !== 1) return
-    const t = e.touches[0]
-    onDown({ clientX: t.clientX, clientY: t.clientY })
+    if (e.touches.length === 2) {
+      // Pinch start
+      const dx = e.touches[0].clientX - e.touches[1].clientX
+      const dy = e.touches[0].clientY - e.touches[1].clientY
+      pinchStartDistRef.current = Math.sqrt(dx * dx + dy * dy)
+      pinchStartScaleRef.current = zoomScale
+      isPanningRef.current = false
+      return
+    }
+
+    if (e.touches.length === 1) {
+      const t = e.touches[0]
+
+      // If zoomed in, single finger pans
+      if (zoomScale > 1.05) {
+        isPanningRef.current = true
+        panStartRef.current = { x: t.clientX, y: t.clientY }
+        panStartOffsetRef.current = zoomOffset
+        return
+      }
+
+      isPanningRef.current = false
+      onDown({ clientX: t.clientX, clientY: t.clientY })
+    }
   }
 
   const onTouchMove = (e) => {
-    if (e.touches.length !== 1) return
-    const t = e.touches[0]
-    onMove({ clientX: t.clientX, clientY: t.clientY })
+    if (e.touches.length === 2) {
+      // Pinch zoom
+      const dx = e.touches[0].clientX - e.touches[1].clientX
+      const dy = e.touches[0].clientY - e.touches[1].clientY
+      const dist = Math.sqrt(dx * dx + dy * dy)
+
+      if (pinchStartDistRef.current) {
+        const ratio = dist / pinchStartDistRef.current
+        const next  = Math.max(1, Math.min(4, pinchStartScaleRef.current * ratio))
+        setZoomScale(next)
+
+        // Reset pan offset when zooming back to 1
+        if (next <= 1.01) setZoomOffset({ x: 0, y: 0 })
+      }
+      return
+    }
+
+    if (e.touches.length === 1) {
+      const t = e.touches[0]
+
+      if (isPanningRef.current && zoomScale > 1.05) {
+        const dx = t.clientX - panStartRef.current.x
+        const dy = t.clientY - panStartRef.current.y
+        setZoomOffset({
+          x: panStartOffsetRef.current.x + dx,
+          y: panStartOffsetRef.current.y + dy
+        })
+        return
+      }
+
+      onMove({ clientX: t.clientX, clientY: t.clientY })
+    }
   }
 
-  const onTouchEnd = ()=> onUp()
-  const isCategoryOpen = !!state.category
-  
-  useEffect(() => {
-    console.log("📦 exportStatus:", exportStatus)
-  }, [exportStatus])
+  const onTouchEnd = (e) => {
+    if (e.touches.length === 0) {
+      pinchStartDistRef.current = null
+      isPanningRef.current = false
+    }
+    onUp()
+  }
 
+  /* ---------- MOUSE WHEEL ZOOM ---------- */
+
+  const onWheel = (e) => {
+    e.preventDefault()
+
+    const delta = e.deltaY < 0 ? 1.1 : 0.91  // scroll up = zoom in
+
+    setZoomScale(prev => {
+      const next = Math.max(1, Math.min(4, prev * delta))
+      if (next <= 1.01) {
+        setZoomOffset({ x: 0, y: 0 })
+        return 1
+      }
+      return next
+    })
+  }
+
+  // Middle-mouse-button pan
+  const onMouseDownPan = (e) => {
+    if (e.button === 1 && zoomScale > 1.05) {
+      e.preventDefault()
+      isPanningRef.current = true
+      panStartRef.current = { x: e.clientX, y: e.clientY }
+      panStartOffsetRef.current = zoomOffset
+    }
+  }
+
+  const onMouseMovePan = (e) => {
+    if (!isPanningRef.current) return
+    const dx = e.clientX - panStartRef.current.x
+    const dy = e.clientY - panStartRef.current.y
+    setZoomOffset({
+      x: panStartOffsetRef.current.x + dx,
+      y: panStartOffsetRef.current.y + dy
+    })
+  }
+
+  const onMouseUpPan = () => {
+    isPanningRef.current = false
+  }
+
+  /* ---------- BEFORE/AFTER ---------- */
+
+  const onCompareDown = () => {
+    compareTimerRef.current = setTimeout(() => {
+      setComparing(true)
+    }, 150)
+  }
+
+  const onCompareUp = () => {
+    clearTimeout(compareTimerRef.current)
+    setComparing(false)
+  }
+
+  const isCategoryOpen = !!state.category
+
+  // Sync comparing state → ref so pipeline reads it without restart
   useEffect(() => {
-    console.log("🎥 recording:", recording)
-  }, [recording])
+    comparingRef.current = comparing
+  }, [comparing])
+
+  // Attach wheel listener with passive:false so we can preventDefault
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const handler = (e) => {
+      e.preventDefault()
+      const delta = e.deltaY < 0 ? 1.1 : 0.91
+      setZoomScale(prev => {
+        const next = Math.max(1, Math.min(4, prev * delta))
+        if (next <= 1.01) {
+          setZoomOffset({ x: 0, y: 0 })
+          return 1
+        }
+        return next
+      })
+    }
+
+    canvas.addEventListener("wheel", handler, { passive: false })
+    return () => canvas.removeEventListener("wheel", handler)
+  }, [])
   
   return (
 
@@ -752,10 +917,32 @@ export default function PreviewCanvas(){
       {/* 🎥 CANVAS */}
       <canvas
         ref={canvasRef}
-        onMouseDown={onDown}
-        onMouseMove={onMove}
-        onMouseUp={onUp}
-        onMouseLeave={onUp}
+        onMouseDown={(e) => {
+          // Middle-mouse or left-click while zoomed → pan
+          if (e.button === 1 || (e.button === 0 && zoomScale > 1.05)) {
+            e.preventDefault()
+            isPanningRef.current = true
+            panStartRef.current = { x: e.clientX, y: e.clientY }
+            panStartOffsetRef.current = zoomOffset
+            return
+          }
+          onDown(e)
+        }}
+        onMouseMove={(e) => {
+          if (isPanningRef.current) {
+            onMouseMovePan(e)
+            return
+          }
+          onMove(e)
+        }}
+        onMouseUp={(e) => {
+          onMouseUpPan()
+          onUp(e)
+        }}
+        onMouseLeave={(e) => {
+          onMouseUpPan()
+          onUp(e)
+        }}
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
@@ -772,9 +959,37 @@ export default function PreviewCanvas(){
           objectFit: "cover",
           background: "black",
           zIndex: 1,
-          cursor: editingRef.current ? "grabbing" : "grab"
+          cursor: zoomScale > 1.05
+            ? (isPanningRef.current ? "grabbing" : "grab")
+            : (editingRef.current ? "grabbing" : "default"),
+          transform: `scale(${zoomScale}) translate(${zoomOffset.x / zoomScale}px, ${zoomOffset.y / zoomScale}px)`,
+          transformOrigin: "center center",
+          transition: "transform 0.05s ease-out"
         }}
       />
+
+      {/* 🔍 ZOOM RESET — shown when zoomed in */}
+      {zoomScale > 1.05 && (
+        <button
+          onClick={() => { setZoomScale(1); setZoomOffset({ x: 0, y: 0 }) }}
+          style={{
+            position: "absolute",
+            bottom: "80px",
+            right: "14px",
+            zIndex: 30,
+            padding: "6px 10px",
+            borderRadius: "10px",
+            background: "rgba(0,0,0,0.45)",
+            backdropFilter: "blur(10px)",
+            border: "1px solid rgba(255,255,255,0.2)",
+            color: "white",
+            fontSize: "12px",
+            cursor: "pointer"
+          }}
+        >
+          {Math.round(zoomScale * 10) / 10}× ✕
+        </button>
+      )}
 
       {/* 🌫 TOP GRADIENT */}
       <div
@@ -975,14 +1190,30 @@ export default function PreviewCanvas(){
           }}
         >
           <div style={{ pointerEvents: "auto", textAlign: "center" }}>
-            
+
+            {/* 🖼️ Frame thumbnail — Feature 10 */}
+            {exportThumb && exportStatus === "recording" && (
+              <img
+                src={exportThumb}
+                alt="export frame"
+                style={{
+                  width: "100px",
+                  height: "auto",
+                  borderRadius: "10px",
+                  marginBottom: "12px",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  objectFit: "cover"
+                }}
+              />
+            )}
+
             <div style={{ fontSize: "16px", marginBottom: "10px" }}>
               {exportStatus === "preparing" && "Preparing file..."}
-              {exportStatus === "recording" && "Recording video"}
+              {exportStatus === "recording" && "Exporting video"}
               {exportStatus === "uploading" && "Uploading video..."}
               {exportStatus === "processing" && "Processing video..."}
               {exportStatus === "downloading" && "Downloading file..."}
-              {exportStatus === "done" && "Saved successfully"}
+              {exportStatus === "done" && "✓ Saved"}
             </div>
 
             {exportStatus === "recording" && (
@@ -997,11 +1228,12 @@ export default function PreviewCanvas(){
                   <div style={{
                     width: `${progress}%`,
                     height: "100%",
-                    background: "white"
+                    background: "white",
+                    transition: "width 0.3s ease"
                   }} />
                 </div>
 
-                <div style={{ marginTop: "6px", fontSize: "12px" }}>
+                <div style={{ marginTop: "6px", fontSize: "12px", opacity: 0.7 }}>
                   {progress}%
                 </div>
               </>
@@ -1011,7 +1243,40 @@ export default function PreviewCanvas(){
         </div>
       )}
 
-      {/* 🔢 VALUE DISPLAY */}
+      {/* 👁️ BEFORE/AFTER BUTTON — Feature 5 */}
+      {state.category && state.category !== "camera" && (
+        <button
+          onMouseDown={onCompareDown}
+          onMouseUp={onCompareUp}
+          onMouseLeave={onCompareUp}
+          onTouchStart={(e) => { e.stopPropagation(); onCompareDown() }}
+          onTouchEnd={(e) => { e.stopPropagation(); onCompareUp() }}
+          style={{
+            position: "absolute",
+            bottom: "80px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 30,
+            padding: "7px 16px",
+            borderRadius: "999px",
+            background: comparing
+              ? "rgba(255,255,255,0.22)"
+              : "rgba(0,0,0,0.38)",
+            backdropFilter: "blur(12px)",
+            border: "1px solid rgba(255,255,255,0.22)",
+            color: "white",
+            fontSize: "12px",
+            fontWeight: comparing ? "600" : "400",
+            cursor: "pointer",
+            userSelect: "none",
+            transition: "background 0.15s ease, font-weight 0.1s"
+          }}
+        >
+          {comparing ? "BEFORE" : "Hold to compare"}
+        </button>
+      )}
+
+      {/*  VALUE DISPLAY */}
       {state.control && (
         <div
           style={{
@@ -1029,6 +1294,48 @@ export default function PreviewCanvas(){
           }}
         >
           {state.control.toUpperCase()} · {Math.round(state.getValue() * 100)}%
+        </div>
+      )}
+
+      {/* 🎚️ VIDEO SCRUBBER — only shown for uploaded videos */}
+      {isUploadedVideo && !recording && (
+        <div
+          style={{
+            position: "absolute",
+            bottom: "72px",   // sits just above the bottom panel, clear of controls
+            left: 0,
+            right: 0,
+            zIndex: 25,
+            padding: "0 12px",
+            pointerEvents: "auto"
+          }}
+        >
+          <input
+            type="range"
+            className="scrubber"
+            min={0}
+            max={1}
+            step={0.001}
+            value={videoProgress}
+            onChange={(e) => {
+              const ratio = parseFloat(e.target.value)
+              const vid   = mediaRef.current
+              if (vid && vid.duration) {
+                vid.currentTime = ratio * vid.duration
+                setVideoProgress(ratio)
+              }
+            }}
+            // Stop the canvas drag-edit from firing when scrubbing
+            onMouseDown={(e) => e.stopPropagation()}
+            onTouchStart={(e) => e.stopPropagation()}
+            style={{
+              width: "100%",
+              height: "3px",
+              background: `linear-gradient(to right,
+                rgba(255,255,255,0.75) ${videoProgress * 100}%,
+                rgba(255,255,255,0.18) ${videoProgress * 100}%)`,
+            }}
+          />
         </div>
       )}
 

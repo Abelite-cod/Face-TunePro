@@ -72,7 +72,7 @@ export async function getLandmarks(media) {
     ctx.drawImage(media, 0, 0, width, height)
 
     const faces = await detector.estimateFaces(offscreen, {
-      flipHorizontal: true
+      flipHorizontal: false
     })
 
     if (!faces || faces.length === 0) return null
