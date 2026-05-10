@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useEditor } from "../../state/editorState"
 import { initFaceMesh, getLandmarks } from "../../engine/vision/facemesh"
 import { runPipeline } from "../../engine/pipeline/pipeline.js"
-import { downloadImage, recordCanvasVideo, fallbackRecord } from "../../engine/export/exporter"
+import { downloadImage, recordCanvasVideo, frameByFrameRecord, supportsH264Encoding } from "../../engine/export/exporter"
 
 
 
@@ -483,17 +483,6 @@ export default function PreviewCanvas(){
 
   const download = async () => {
 
-    function supportsWebCodecs() {
-      return (
-        "VideoEncoder" in window &&
-        "AudioEncoder" in window
-      )
-    }
-    
-    function isIOS() {
-      return /iPhone|iPad|iPod/i.test(navigator.userAgent)
-    }
-
     if (recording) return
 
     const canvas = canvasRef.current
@@ -556,21 +545,29 @@ export default function PreviewCanvas(){
       }
 
 
-      // 🔥 HYBRID SWITCH
-      if (!isIOS() && supportsWebCodecs()) {
-        // 🟢 Desktop / Android
+      // 🔥 HYBRID SWITCH — test actual H.264 encode support (not just API presence)
+      const canUseWebCodecs = await supportsH264Encoding()
+
+      if (canUseWebCodecs) {
+        // ✅ WebCodecs path — Chrome/Firefox/Edge on Windows, Mac, Android
         recorderRef.current = recordCanvasVideo(canvas, media, {
           ...handlers,
           state,
           onThumb: (dataUrl) => setExportThumb(dataUrl)
         })
       } else {
-        console.warn("🍎 Using iPhone fallback")
+        // ✅ Frame-by-frame MediaRecorder path — Safari on Mac/iOS, older browsers
+        // Seeks frame-by-frame so output FPS matches source (no real-time lag)
+        console.log("ℹ️ Using frame-by-frame MediaRecorder export")
 
         try {
-          fallbackRecord(canvas, media, handlers)
+          frameByFrameRecord(canvas, media, {
+            ...handlers,
+            state,
+            onThumb: (dataUrl) => setExportThumb(dataUrl)
+          })
         } catch (e) {
-          console.error("Fallback crashed:", e)
+          console.error("frameByFrameRecord crashed:", e)
           setExportStatus(null)
         }
 
