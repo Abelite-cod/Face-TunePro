@@ -245,12 +245,6 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
   const height = canvas.height
   const gl     = canvas.getContext("webgl") || canvas.getContext("webgl2")
 
-  // 2D proxy canvas — MediaRecorder records this
-  const proxy    = document.createElement("canvas")
-  proxy.width    = width
-  proxy.height   = height
-  const proxyCtx = proxy.getContext("2d")
-
   // Pick best supported MIME type
   const mimeType = [
     "video/mp4;codecs=avc1",
@@ -260,57 +254,106 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     "video/webm"
   ].find(m => MediaRecorder.isTypeSupported(m)) || "video/webm"
 
-  const stream   = proxy.captureStream(fps)
-  const recorder = new MediaRecorder(stream, { mimeType })
+  // Build a combined stream: canvas video + original audio track
+  // This avoids FFmpeg entirely — audio is captured natively
+  const canvasStream = canvas.captureStream(fps)
+  
+  // Try to add the video's audio track to the stream
+  try {
+    if (media.captureStream) {
+      const mediaStream = media.captureStream()
+      const audioTracks = mediaStream.getAudioTracks()
+      audioTracks.forEach(track => canvasStream.addTrack(track))
+    }
+  } catch (e) {
+    console.warn("⚠️ Could not add audio track:", e)
+  }
+
+  const recorder = new MediaRecorder(canvasStream, { mimeType })
   const chunks   = []
 
   recorder.ondataavailable = (e) => {
     if (e.data && e.data.size > 0) chunks.push(e.data)
   }
 
+  // Reset video to start and play (needed for audio sync)
+  media.currentTime = 0
+  media.muted = false
+
   // Start recording
-  recorder.start()
+  recorder.start(100) // collect data every 100ms
   onStart("recording")
 
-  const totalFrames     = Math.floor(media.duration * fps)
-  const frameDuration   = 1000 / fps   // ms per frame
+  // Play the video — real-time capture with deformations applied each frame
+  await media.play()
+
   const smoothLandmarks = makeExportSmoother()
-  const REDETECT_EVERY  = 5
+  const REDETECT_EVERY  = 8  // less frequent on mobile for performance
   let cachedLandmarks   = null
+  let frameCount        = 0
+  let animFrameId       = null
+  const duration        = media.duration || 0
 
-  for (let frame = 0; frame < totalFrames; frame++) {
-
-    // Re-detect landmarks periodically
-    if (frame === 0 || frame % REDETECT_EVERY === 0) {
-      try {
-        media.currentTime = frame / fps
-        await new Promise((resolve) => {
-          const onSeeked = () => { media.removeEventListener("seeked", onSeeked); resolve() }
-          media.addEventListener("seeked", onSeeked)
-        })
-        const detected = await getLandmarks(media)
-        if (detected) cachedLandmarks = detected
-      } catch (e) {
-        console.warn("⚠️ landmark detection failed for frame", frame, e)
+  await new Promise((resolve) => {
+    const renderLoop = async () => {
+      if (media.ended || media.paused) {
+        resolve()
+        return
       }
+
+      // Re-detect landmarks periodically
+      if (frameCount === 0 || frameCount % REDETECT_EVERY === 0) {
+        try {
+          const detected = await getLandmarks(media)
+          if (detected) cachedLandmarks = detected
+        } catch (_) {}
+      }
+
+      // Apply deformations and render
+      let smooth   = cachedLandmarks
+      let modified = cachedLandmarks
+
+      if (cachedLandmarks) {
+        smooth   = smoothLandmarks(cachedLandmarks)
+        modified = state ? deform(smooth, state) : smooth
+      }
+
+      const enhanceControls = state ? (state.getAll("enhance") || {}) : {}
+      const filterControls  = state ? (state.getAll("filter")  || {}) : {}
+
+      renderFrame(gl, media, smooth, modified, { ...enhanceControls, ...filterControls })
+
+      // Progress
+      if (duration > 0) {
+        onProgress(media.currentTime / duration)
+      }
+
+      if (onThumb && frameCount % 30 === 0) {
+        try { onThumb(canvas.toDataURL("image/jpeg", 0.5)) } catch (_) {}
+      }
+
+      frameCount++
+      animFrameId = requestAnimationFrame(renderLoop)
     }
 
-    // Render the WebGL frame
-    await renderExportFrame(gl, media, frame, fps, cachedLandmarks, smoothLandmarks, state)
+    // Safety timeout — never get permanently stuck
+    const safetyTimer = setTimeout(() => {
+      console.warn("⚠️ Export safety timeout triggered")
+      if (animFrameId) cancelAnimationFrame(animFrameId)
+      resolve()
+    }, (duration + 10) * 1000)
 
-    // Copy WebGL canvas → 2D proxy canvas so MediaRecorder captures it
-    proxyCtx.drawImage(canvas, 0, 0)
+    media.addEventListener("ended", () => {
+      clearTimeout(safetyTimer)
+      if (animFrameId) cancelAnimationFrame(animFrameId)
+      resolve()
+    }, { once: true })
 
-    if (onThumb && frame % 15 === 0) {
-      try { onThumb(canvas.toDataURL("image/jpeg", 0.5)) } catch (_) {}
-    }
+    renderLoop()
+  })
 
-    onProgress(frame / totalFrames)
-
-    // Pace frames correctly — wait one frame duration so MediaRecorder
-    // records at the right speed and the output has correct FPS/duration
-    await new Promise(r => setTimeout(r, frameDuration))
-  }
+  // Small buffer to let MediaRecorder flush
+  await new Promise(r => setTimeout(r, 300))
 
   // Stop recorder and wait for final data
   await new Promise((resolve) => {
@@ -318,27 +361,15 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     recorder.stop()
   })
 
-  // Silent video blob from MediaRecorder
-  const ext       = mimeType.startsWith("video/mp4") ? "mp4" : "webm"
-  const silentBlob = new Blob(chunks, { type: mimeType })
-
-  // ✅ Mux original audio back in — same as WebCodecs path
-  let finalBlob = silentBlob
-  if (media.tagName === "VIDEO" && media.src) {
-    try {
-      finalBlob = await muxAudio(silentBlob, media)
-    } catch (e) {
-      console.warn("⚠️ Audio mux failed, using silent video:", e)
-      finalBlob = silentBlob
-    }
-  }
+  const ext      = mimeType.startsWith("video/mp4") ? "mp4" : "webm"
+  const finalBlob = new Blob(chunks, { type: mimeType })
 
   const url = URL.createObjectURL(finalBlob)
   const a   = document.createElement("a")
   a.href     = url
   a.download = `face-edit.${ext}`
   a.click()
-  setTimeout(() => URL.revokeObjectURL(url), 2000)
+  setTimeout(() => URL.revokeObjectURL(url), 3000)
 
   onStop()
 }
