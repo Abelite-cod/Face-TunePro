@@ -545,8 +545,8 @@ export default function PreviewCanvas(){
       }
 
 
-      // 🔥 HYBRID SWITCH — test actual H.264 encode support (not just API presence)
-      const canUseWebCodecs = await supportsH264Encoding()
+      // 🔥 HYBRID SWITCH — synchronous UA check, no async hanging
+      const canUseWebCodecs = supportsH264Encoding()
 
       if (canUseWebCodecs) {
         // ✅ WebCodecs path — Chrome/Firefox/Edge on Windows, Mac, Android

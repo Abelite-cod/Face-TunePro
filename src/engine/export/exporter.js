@@ -45,24 +45,25 @@ export function downloadImage(canvas) {
 ========================= */
 
 /**
- * Properly tests whether VideoEncoder can actually encode H.264 on this device.
- * Mac Chrome sometimes reports WebCodecs available but fails on avc1.
+ * Synchronous check — no async hanging possible.
+ * iOS Safari and all Safari browsers use the frameByFrameRecord path.
+ * Mac Chrome/Firefox use WebCodecs.
  */
-export async function supportsH264Encoding() {
+export function supportsH264Encoding() {
+  // No VideoEncoder API at all
   if (typeof VideoEncoder === "undefined") return false
 
-  try {
-    const support = await VideoEncoder.isConfigSupported({
-      codec:     "avc1.42001f",
-      width:     1280,
-      height:    720,
-      bitrate:   5_000_000,
-      framerate: 30
-    })
-    return support.supported === true
-  } catch (e) {
-    return false
-  }
+  const ua = navigator.userAgent
+
+  // iOS devices — always use fallback
+  if (/iPhone|iPad|iPod/i.test(ua)) return false
+
+  // Safari on Mac — use fallback (Safari WebCodecs is unreliable)
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua)
+  if (isSafari) return false
+
+  // Chrome, Firefox, Edge on Windows/Mac/Android — use WebCodecs
+  return true
 }
 
 /* =========================
@@ -238,12 +239,8 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     onStart    = () => {},
     onStop     = () => {},
     onThumb    = null,
-    state      = null
+    state      = null   // kept for API compatibility but not used here
   } = options
-
-  const width  = canvas.width
-  const height = canvas.height
-  const gl     = canvas.getContext("webgl") || canvas.getContext("webgl2")
 
   // Pick best supported MIME type
   const mimeType = [
@@ -254,19 +251,20 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     "video/webm"
   ].find(m => MediaRecorder.isTypeSupported(m)) || "video/webm"
 
-  // Build a combined stream: canvas video + original audio track
-  // This avoids FFmpeg entirely — audio is captured natively
+  // Canvas video stream
   const canvasStream = canvas.captureStream(fps)
-  
-  // Try to add the video's audio track to the stream
+
+  // Audio via Web Audio API — works on iOS Safari where captureStream audio doesn't
+  let audioCtx = null
   try {
-    if (media.captureStream) {
-      const mediaStream = media.captureStream()
-      const audioTracks = mediaStream.getAudioTracks()
-      audioTracks.forEach(track => canvasStream.addTrack(track))
-    }
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)()
+    const source = audioCtx.createMediaElementSource(media)
+    const dest   = audioCtx.createMediaStreamDestination()
+    source.connect(dest)
+    source.connect(audioCtx.destination) // also play through speakers
+    dest.stream.getAudioTracks().forEach(t => canvasStream.addTrack(t))
   } catch (e) {
-    console.warn("⚠️ Could not add audio track:", e)
+    console.warn("⚠️ Web Audio routing failed:", e)
   }
 
   const recorder = new MediaRecorder(canvasStream, { mimeType })
@@ -276,52 +274,43 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     if (e.data && e.data.size > 0) chunks.push(e.data)
   }
 
-  // Reset video to start and play (needed for audio sync)
+  // Reset to start
   media.currentTime = 0
   media.muted = false
 
   // Start recording
-  recorder.start(100) // collect data every 100ms
+  recorder.start(100)
   onStart("recording")
 
-  // Play the video — real-time capture with deformations applied each frame
-  await media.play()
+  // Play video
+  try {
+    await media.play()
+  } catch (e) {
+    console.warn("⚠️ media.play() failed:", e)
+    media.muted = true
+    try { await media.play() } catch (_) {}
+  }
 
-  const smoothLandmarks = makeExportSmoother()
-  const REDETECT_EVERY  = 8  // less frequent on mobile for performance
-  let cachedLandmarks   = null
-  let frameCount        = 0
-  let animFrameId       = null
-  const duration        = media.duration || 0
+  // Resume AudioContext if suspended (iOS requires user gesture)
+  if (audioCtx && audioCtx.state === "suspended") {
+    try { await audioCtx.resume() } catch (_) {}
+  }
+
+  let frameCount  = 0
+  let animFrameId = null
+  const duration  = media.duration || 0
+
+  // The live pipeline is ALREADY rendering the correct warped output to the canvas
+  // every animation frame. We just record that canvas — no need to re-apply deforms.
+  // This eliminates the shaking caused by using stale/frozen landmarks.
 
   await new Promise((resolve) => {
-    const renderLoop = async () => {
-      if (media.ended || media.paused) {
+    const renderLoop = () => {
+      // Only stop when video has actually ended (not just paused at start)
+      if (media.ended || (media.paused && frameCount > 0)) {
         resolve()
         return
       }
-
-      // Re-detect landmarks periodically
-      if (frameCount === 0 || frameCount % REDETECT_EVERY === 0) {
-        try {
-          const detected = await getLandmarks(media)
-          if (detected) cachedLandmarks = detected
-        } catch (_) {}
-      }
-
-      // Apply deformations and render
-      let smooth   = cachedLandmarks
-      let modified = cachedLandmarks
-
-      if (cachedLandmarks) {
-        smooth   = smoothLandmarks(cachedLandmarks)
-        modified = state ? deform(smooth, state) : smooth
-      }
-
-      const enhanceControls = state ? (state.getAll("enhance") || {}) : {}
-      const filterControls  = state ? (state.getAll("filter")  || {}) : {}
-
-      renderFrame(gl, media, smooth, modified, { ...enhanceControls, ...filterControls })
 
       // Progress
       if (duration > 0) {
@@ -353,15 +342,24 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
   })
 
   // Small buffer to let MediaRecorder flush
-  await new Promise(r => setTimeout(r, 300))
+  await new Promise(r => setTimeout(r, 500))
 
-  // Stop recorder and wait for final data
-  await new Promise((resolve) => {
-    recorder.onstop = resolve
-    recorder.stop()
-  })
+  // Stop recorder and wait for final data — with timeout safety for iOS Safari
+  await Promise.race([
+    new Promise((resolve) => {
+      recorder.onstop = resolve
+      if (recorder.state !== "inactive") recorder.stop()
+      else resolve()
+    }),
+    new Promise(resolve => setTimeout(resolve, 3000)) // safety: never hang
+  ])
 
-  const ext      = mimeType.startsWith("video/mp4") ? "mp4" : "webm"
+  // Clean up AudioContext
+  if (audioCtx) {
+    try { audioCtx.close() } catch (_) {}
+  }
+
+  const ext       = mimeType.startsWith("video/mp4") ? "mp4" : "webm"
   const finalBlob = new Blob(chunks, { type: mimeType })
 
   const url = URL.createObjectURL(finalBlob)
