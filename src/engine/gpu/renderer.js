@@ -28,9 +28,6 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
 
   gl.viewport(0, 0, gl.canvas.width, gl.canvas.height)
 
-  gl.clearColor(0, 0, 0, 1)
-  gl.clear(gl.COLOR_BUFFER_BIT)
-
   const s = getCtxState(gl)
 
   if (!s.program) {
@@ -68,6 +65,10 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
 
   const isVideo = media.tagName === "VIDEO"
   if (isVideo && media.readyState < 2) return
+
+  // Clear only when media is ready — prevents black flash during export seeks
+  gl.clearColor(0, 0, 0, 1)
+  gl.clear(gl.COLOR_BUFFER_BIT)
 
   gl.useProgram(s.program)
 

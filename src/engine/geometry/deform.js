@@ -138,7 +138,7 @@ function applyNose(src, out, c) {
 
   // SIZE — scale all nose points from anchor
   if (size) {
-    const scale = 1 + size * 0.18
+    const scale = 1 + size * 0.45
     for (let i of noseAll) {
       const dx = src[i].x - anchor.x
       const dy = src[i].y - anchor.y
@@ -154,7 +154,7 @@ function applyNose(src, out, c) {
     const cx = getCenter(src, nostrils).x
     for (let i of nostrils) {
       const dx = src[i].x - cx
-      out[i].x = cx + dx * (1 + width * 0.42)
+      out[i].x = cx + dx * (1 + width * 0.65)
     }
   }
 
@@ -163,14 +163,14 @@ function applyNose(src, out, c) {
     const cx = getCenter(src, noseBridge).x
     for (let i of noseBridge) {
       const dx = src[i].x - cx
-      out[i].x = cx + dx * (1 - narrow * 0.18)
+      out[i].x = cx + dx * (1 - narrow * 0.35)
     }
   }
 
   // LIFT — move entire tip region up/down uniformly
   if (lift) {
     for (let i of noseTip) {
-      out[i].y = src[i].y - lift * 1.2
+      out[i].y = src[i].y - lift * 3.0
     }
   }
 
@@ -180,7 +180,7 @@ function applyNose(src, out, c) {
     for (let i of [1, 2, 4, 5]) {
       const dy = src[i].y - pivot.y
       if (dy > 0) {
-        out[i].y = src[i].y + tip * 1.5 * (dy / 20)
+        out[i].y = src[i].y + tip * 3.0 * (dy / 20)
       }
     }
   }

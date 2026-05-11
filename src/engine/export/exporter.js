@@ -97,6 +97,7 @@ async function renderExportFrame(gl, media, frame, fps, cachedLandmarks, smoothL
   // Seek to frame
   media.currentTime = frame / fps
 
+  // Wait for seek to complete
   await new Promise((resolve) => {
     const onSeeked = () => {
       media.removeEventListener("seeked", onSeeked)
@@ -104,6 +105,18 @@ async function renderExportFrame(gl, media, frame, fps, cachedLandmarks, smoothL
     }
     media.addEventListener("seeked", onSeeked)
   })
+
+  // Wait for frame to be fully decoded (readyState >= 2 = HAVE_CURRENT_DATA)
+  // This prevents the black flash when the frame isn't ready yet
+  if (media.readyState < 2) {
+    await new Promise((resolve) => {
+      const check = () => {
+        if (media.readyState >= 2) resolve()
+        else requestAnimationFrame(check)
+      }
+      check()
+    })
+  }
 
   // Apply smoothing + deform
   let smooth   = cachedLandmarks
@@ -251,8 +264,9 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
     "video/webm"
   ].find(m => MediaRecorder.isTypeSupported(m)) || "video/webm"
 
-  // Canvas video stream
-  const canvasStream = canvas.captureStream(fps)
+  // Use 0 fps for captureStream — let the browser decide timing based on actual renders
+  // This prevents the "slow motion" effect when device renders slower than 30fps
+  const canvasStream = canvas.captureStream(0)
 
   // Audio via Web Audio API — works on iOS Safari where captureStream audio doesn't
   let audioCtx = null
@@ -300,16 +314,24 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
   let animFrameId = null
   const duration  = media.duration || 0
 
-  // The live pipeline is ALREADY rendering the correct warped output to the canvas
-  // every animation frame. We just record that canvas — no need to re-apply deforms.
-  // This eliminates the shaking caused by using stale/frozen landmarks.
+  // The live pipeline renders the warped canvas every frame.
+  // We just need to tell captureStream(0) to grab a new frame on each render.
+  // captureStream(0) = manual frame capture — we call track.requestFrame() each time.
+  const videoTrack = canvasStream.getVideoTracks()[0]
 
   await new Promise((resolve) => {
-    const renderLoop = () => {
+
+    const onFrame = () => {
       // Only stop when video has actually ended (not just paused at start)
       if (media.ended || (media.paused && frameCount > 0)) {
         resolve()
         return
+      }
+
+      // Manually push the current canvas frame into the stream
+      // This ensures MediaRecorder gets exactly one frame per render, not based on time
+      if (videoTrack && videoTrack.requestFrame) {
+        videoTrack.requestFrame()
       }
 
       // Progress
@@ -322,7 +344,14 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
       }
 
       frameCount++
-      animFrameId = requestAnimationFrame(renderLoop)
+
+      // Use requestVideoFrameCallback if available (iOS Safari 15.4+)
+      // — fires exactly once per decoded video frame for perfect sync
+      if (media.requestVideoFrameCallback) {
+        media.requestVideoFrameCallback(onFrame)
+      } else {
+        animFrameId = requestAnimationFrame(onFrame)
+      }
     }
 
     // Safety timeout — never get permanently stuck
@@ -338,7 +367,12 @@ export async function frameByFrameRecord(canvas, media, options = {}) {
       resolve()
     }, { once: true })
 
-    renderLoop()
+    // Start the loop
+    if (media.requestVideoFrameCallback) {
+      media.requestVideoFrameCallback(onFrame)
+    } else {
+      animFrameId = requestAnimationFrame(onFrame)
+    }
   })
 
   // Small buffer to let MediaRecorder flush

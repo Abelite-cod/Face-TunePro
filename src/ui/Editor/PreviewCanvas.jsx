@@ -311,6 +311,11 @@ export default function PreviewCanvas(){
     mediaRef.current = null
     landmarksRef.current = null
 
+    // 🧼 reset pipeline globals so new media is treated as fresh
+    window.__lastMedia  = null
+    window.__landmarks  = null
+    window.__detecting  = false
+
     // 🧼 reset UI states
     setRecording(false)
     setProgress(0)
@@ -844,7 +849,7 @@ export default function PreviewCanvas(){
 
         onClick={() => {
           if (!movedHomeRef.current) {
-            goHome()
+            window.location.reload()
           }
         }}
 
