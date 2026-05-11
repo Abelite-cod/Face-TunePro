@@ -72,7 +72,9 @@ export function supportsH264Encoding() {
 
 function makeExportSmoother() {
   let prev = null
-  const alpha = 0.75
+  // Higher alpha = more smoothing between landmark detections.
+  // 0.92 means each new detection blends in over ~12 frames instead of jumping instantly.
+  const alpha = 0.92
 
   return function smooth(current) {
     if (!prev || prev.length !== current.length) {
@@ -180,15 +182,19 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
   const totalFrames     = Math.floor(media.duration * fps)
   const smoothLandmarks = makeExportSmoother()
-  const REDETECT_EVERY  = 5
-  let cachedLandmarks   = null
+
+  // Re-detect every 30 frames (1 second) — not every 5.
+  // Detecting too frequently causes oscillation because each detection
+  // returns slightly different landmark positions, making the warp jump.
+  // Every 30 frames is frequent enough to track head movement while
+  // being slow enough that the heavy smoothing (alpha=0.92) hides any transition.
+  const REDETECT_EVERY = 30
+  let cachedLandmarks  = null
 
   for (let frame = 0; frame < totalFrames; frame++) {
 
-    // Re-detect landmarks periodically
     if (frame === 0 || frame % REDETECT_EVERY === 0) {
       try {
-        // Seek first so detection is on the right frame
         media.currentTime = frame / fps
         await new Promise((resolve) => {
           const onSeeked = () => { media.removeEventListener("seeked", onSeeked); resolve() }
