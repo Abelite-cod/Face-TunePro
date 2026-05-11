@@ -72,9 +72,7 @@ export function supportsH264Encoding() {
 
 function makeExportSmoother() {
   let prev = null
-  // Higher alpha = more smoothing between landmark detections.
-  // 0.92 means each new detection blends in over ~12 frames instead of jumping instantly.
-  const alpha = 0.92
+  const alpha = 0.75
 
   return function smooth(current) {
     if (!prev || prev.length !== current.length) {
@@ -87,6 +85,38 @@ function makeExportSmoother() {
     }))
     prev = smoothed
     return smoothed
+  }
+}
+
+/**
+ * Extra smoother applied ONLY to nose landmarks.
+ * The nose anchor (landmark 1) is very sensitive — even 1-2px jitter
+ * with the high multiplier (0.45) causes visible oscillation.
+ * Higher alpha = more stable nose without affecting other face parts.
+ */
+function makeNoseSmoother() {
+  // Nose landmark indices used in applyNose
+  const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6])
+  let prev = null
+  const alpha = 0.92  // very heavy smoothing for nose only
+
+  return function smoothNose(current) {
+    if (!prev || prev.length !== current.length) {
+      prev = current.map(p => ({ x: p.x, y: p.y }))
+      return current
+    }
+    const result = current.map((p, i) => {
+      if (!NOSE_INDICES.has(i)) return p  // leave non-nose points untouched
+      return {
+        x: prev[i].x * alpha + p.x * (1 - alpha),
+        y: prev[i].y * alpha + p.y * (1 - alpha)
+      }
+    })
+    // Update prev only for nose indices
+    for (let i of NOSE_INDICES) {
+      prev[i] = { x: result[i].x, y: result[i].y }
+    }
+    return result
   }
 }
 
@@ -182,13 +212,9 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
   const totalFrames     = Math.floor(media.duration * fps)
   const smoothLandmarks = makeExportSmoother()
+  const smoothNose      = makeNoseSmoother()  // extra stability for nose only
 
-  // Re-detect every 30 frames (1 second) — not every 5.
-  // Detecting too frequently causes oscillation because each detection
-  // returns slightly different landmark positions, making the warp jump.
-  // Every 30 frames is frequent enough to track head movement while
-  // being slow enough that the heavy smoothing (alpha=0.92) hides any transition.
-  const REDETECT_EVERY = 30
+  const REDETECT_EVERY = 5
   let cachedLandmarks  = null
 
   for (let frame = 0; frame < totalFrames; frame++) {
@@ -207,7 +233,10 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
       }
     }
 
-    await renderExportFrame(gl, media, frame, fps, cachedLandmarks, smoothLandmarks, state)
+    // Apply nose-specific extra smoothing on top of the main smoother
+    const noseStabilized = cachedLandmarks ? smoothNose(cachedLandmarks) : cachedLandmarks
+
+    await renderExportFrame(gl, media, frame, fps, noseStabilized, smoothLandmarks, state)
 
     const bitmap     = await createImageBitmap(canvas)
     const videoFrame = new VideoFrame(bitmap, {

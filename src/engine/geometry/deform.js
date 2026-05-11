@@ -105,7 +105,7 @@ function eyeTransform(src, out, indices, size, width, height, tilt, distance, fa
 }
 
 /* =========================
-   NOSE  (single-pass, tight local)
+   NOSE — gradient-weighted, Facetune-style
 ========================= */
 
 function applyNose(src, out, c) {
@@ -117,70 +117,95 @@ function applyNose(src, out, c) {
 
   if (!size && !width && !narrow && !lift && !tip) return
 
-  // Nose region — carefully bounded
+  // Key anatomical landmarks
   const noseAll    = [1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6]
   const noseTip    = [1, 2, 5, 4, 19, 94]
   const noseBridge = [168, 197, 195, 6]
   const nostrils   = [98, 327, 45, 275, 2, 5]
 
-  // Anchor = nose tip landmark
-  const anchor = { x: src[1].x, y: src[1].y }
+  // Bridge root = top of nose (landmark 168), tip = bottom (landmark 1)
+  const bridgeY = src[168].y
+  const tipY    = src[1].y
+  const noseH   = Math.abs(tipY - bridgeY) || 1
 
-  // Compute bounding radius of nose region
-  let maxDist = 0
-  for (let i of noseAll) {
-    const dx = src[i].x - anchor.x
-    const dy = src[i].y - anchor.y
-    const d  = Math.sqrt(dx * dx + dy * dy)
-    if (d > maxDist) maxDist = d
-  }
-  if (maxDist < 1) return
+  // Horizontal center axis of the nose
+  const noseCx = (src[98].x + src[327].x) / 2
 
-  // SIZE — scale all nose points from anchor
+  // ── SIZE ──────────────────────────────────────────────────────────────────
+  // Facetune-style: uniform radial scale from bridge root + proportional
+  // nostril spread. When the nose gets bigger, the nostrils also widen
+  // naturally (like a real nose does in 3D). When smaller, they narrow.
   if (size) {
-    const scale = 1 + size * 0.45
+    const anchor = { x: noseCx, y: bridgeY }
+    const scale  = 1 + size * 0.32
+
+    // 1. Scale all nose points radially from bridge root
     for (let i of noseAll) {
       const dx = src[i].x - anchor.x
       const dy = src[i].y - anchor.y
-      const d  = Math.sqrt(dx * dx + dy * dy)
-      const f  = Math.max(0, 1 - d / (maxDist * 1.1))
-      out[i].x = anchor.x + dx * (1 + (scale - 1) * f)
-      out[i].y = anchor.y + dy * (1 + (scale - 1) * f)
+      out[i].x = anchor.x + dx * scale
+      out[i].y = anchor.y + dy * scale
     }
-  }
 
-  // WIDTH — horizontal scale of nostrils
-  if (width) {
-    const cx = getCenter(src, nostrils).x
+    // 2. Extra horizontal spread on nostrils proportional to size
+    // (nostrils widen more than the bridge when nose gets bigger)
     for (let i of nostrils) {
-      const dx = src[i].x - cx
-      out[i].x = cx + dx * (1 + width * 0.65)
+      const t  = Math.max(0, Math.min(1, (src[i].y - bridgeY) / noseH))
+      const dx = out[i].x - noseCx   // use already-scaled position
+      out[i].x = noseCx + dx * (1 + size * 0.15 * t)
     }
   }
 
-  // NARROW — compress bridge horizontally
+  // ── WIDTH (nostrils) ──────────────────────────────────────────────────────
+  // Push nostrils outward/inward from the center axis.
+  // Gradient: effect is 100% at the nostril base, 0% at the bridge.
+  // This matches how a real nose widens — the bridge stays fixed.
+  // Range: ±0.40 gives natural-looking ±15px shift at full slider.
+  if (width) {
+    for (let i of nostrils) {
+      const dx = src[i].x - noseCx
+
+      // Vertical gradient: 1.0 at tip level, 0.0 at bridge level
+      const t = Math.max(0, Math.min(1, (src[i].y - bridgeY) / noseH))
+
+      out[i].x = noseCx + dx * (1 + width * 0.40 * t)
+    }
+  }
+
+  // ── NARROW (bridge) ───────────────────────────────────────────────────────
+  // Compress the upper nose (bridge) horizontally.
+  // Gradient: 1.0 at bridge, 0.0 at tip — opposite of width.
   if (narrow) {
-    const cx = getCenter(src, noseBridge).x
     for (let i of noseBridge) {
-      const dx = src[i].x - cx
-      out[i].x = cx + dx * (1 - narrow * 0.35)
+      const dx = src[i].x - noseCx
+
+      // Vertical gradient: 1.0 at bridge, 0.0 at tip
+      const t = Math.max(0, Math.min(1, 1 - (src[i].y - bridgeY) / noseH))
+
+      out[i].x = noseCx + dx * (1 - narrow * 0.28 * t)
     }
   }
 
-  // LIFT — move entire tip region up/down uniformly
+  // ── LIFT ──────────────────────────────────────────────────────────────────
+  // Move the entire nose tip region up or down uniformly.
+  // Gradient: strongest at the very tip, fades toward the bridge.
   if (lift) {
     for (let i of noseTip) {
-      out[i].y = src[i].y - lift * 3.0
+      const t = Math.max(0, Math.min(1, (src[i].y - bridgeY) / noseH))
+      out[i].y = src[i].y - lift * 4.0 * t
     }
   }
 
-  // TIP — rotate tip relative to bridge pivot
+  // ── TIP ───────────────────────────────────────────────────────────────────
+  // Tilt the nose tip up or down by rotating around the bridge pivot.
+  // Only affects the very bottom tip points.
   if (tip) {
-    const pivot = { x: src[1].x, y: src[168].y }
+    const pivotY = bridgeY + noseH * 0.6  // pivot at 60% down the nose
     for (let i of [1, 2, 4, 5]) {
-      const dy = src[i].y - pivot.y
+      const dy = src[i].y - pivotY
       if (dy > 0) {
-        out[i].y = src[i].y + tip * 3.0 * (dy / 20)
+        // Scale displacement — tip moves more than base
+        out[i].y = src[i].y + tip * 2.5 * (dy / (noseH * 0.4))
       }
     }
   }

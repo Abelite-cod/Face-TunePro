@@ -502,7 +502,7 @@ export default function PreviewCanvas(){
     await forceRenderFrame()
 
     if (media.tagName === "VIDEO" && !media.srcObject) {
-      media.muted = false
+      media.muted = true   // mute during export — doesn't affect output audio
       const wasLooping = media.loop
       media.loop = false
 
@@ -535,6 +535,7 @@ export default function PreviewCanvas(){
           console.log("🛑 RECORD STOP")
 
           media.loop = wasLooping
+          media.muted = false   // unmute after export
           setRecording(false)
           setProgress(0)
           setExportThumb(null)
