@@ -956,16 +956,19 @@ export default function PreviewCanvas(){
         style={{
           position: "absolute",
           touchAction: "none",
-          inset: 0,
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
+          top: "50%",
+          left: "50%",
+          transform: `translate(-50%, -50%) scale(${zoomScale}) translate(${zoomOffset.x / zoomScale}px, ${zoomOffset.y / zoomScale}px)`,
+          // Contain the canvas within the viewport — works for both portrait and landscape
+          maxWidth: "100%",
+          maxHeight: "100%",
+          width: "auto",
+          height: "auto",
           background: "black",
           zIndex: 1,
           cursor: zoomScale > 1.05
             ? (isPanningRef.current ? "grabbing" : "grab")
             : (editingRef.current ? "grabbing" : "default"),
-          transform: `scale(${zoomScale}) translate(${zoomOffset.x / zoomScale}px, ${zoomOffset.y / zoomScale}px)`,
           transformOrigin: "center center",
           transition: "transform 0.05s ease-out"
         }}

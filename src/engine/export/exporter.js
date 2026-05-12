@@ -129,22 +129,26 @@ async function renderExportFrame(gl, media, frame, fps, cachedLandmarks, smoothL
   // Seek to frame
   media.currentTime = frame / fps
 
-  // Wait for seek to complete
-  await new Promise((resolve) => {
-    const onSeeked = () => {
-      media.removeEventListener("seeked", onSeeked)
-      resolve()
-    }
-    media.addEventListener("seeked", onSeeked)
-  })
+  // Wait for seek to complete — with timeout safety
+  await Promise.race([
+    new Promise((resolve) => {
+      const onSeeked = () => {
+        media.removeEventListener("seeked", onSeeked)
+        resolve()
+      }
+      media.addEventListener("seeked", onSeeked)
+    }),
+    new Promise(resolve => setTimeout(resolve, 2000))  // safety: don't hang if seeked never fires
+  ])
 
   // Wait for frame to be fully decoded (readyState >= 2 = HAVE_CURRENT_DATA)
-  // This prevents the black flash when the frame isn't ready yet
+  // Use setTimeout instead of requestAnimationFrame — rAF stops when tab is hidden,
+  // setTimeout continues (throttled to 1fps but still runs).
   if (media.readyState < 2) {
     await new Promise((resolve) => {
       const check = () => {
         if (media.readyState >= 2) resolve()
-        else requestAnimationFrame(check)
+        else setTimeout(check, 16)  // ~60fps polling, works when tab is hidden
       }
       check()
     })
@@ -210,11 +214,32 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
 
   onStart()
 
+  // Request a Web Lock to prevent browser from throttling this tab when hidden.
+  // The lock is held for the duration of the export, then released.
+  // Falls back gracefully if Web Locks API is not available.
+  let releaseLock = null
+  if (navigator.locks) {
+    await new Promise((resolve) => {
+      navigator.locks.request("face-export", { mode: "exclusive" }, async (lock) => {
+        releaseLock = resolve
+        resolve()  // continue immediately — lock is held until releaseLock() is called
+        // Return a promise that stays pending until export is done
+        await new Promise(r => { releaseLock = r })
+      })
+    })
+  }
+
   const totalFrames     = Math.floor(media.duration * fps)
   const smoothLandmarks = makeExportSmoother()
   const smoothNose      = makeNoseSmoother()  // extra stability for nose only
 
-  const REDETECT_EVERY = 5
+  // Scale detection frequency by video duration:
+  // Short (<10s): every 5 frames (6× per second) — precise tracking
+  // Medium (10-30s): every 15 frames (2× per second)
+  // Long (>30s): every 30 frames (1× per second) — fast export
+  const duration = media.duration || 0
+  const REDETECT_EVERY = duration < 10 ? 5 : duration < 30 ? 15 : 30
+
   let cachedLandmarks  = null
 
   for (let frame = 0; frame < totalFrames; frame++) {
@@ -269,6 +294,9 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
   a.download = "face-edit.mp4"
   a.click()
   setTimeout(() => URL.revokeObjectURL(url), 2000)
+
+  // Release the Web Lock
+  if (releaseLock) releaseLock()
 
   onStop()
 }

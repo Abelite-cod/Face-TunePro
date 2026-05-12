@@ -168,7 +168,7 @@ function applyNose(src, out, c) {
       // Vertical gradient: 1.0 at tip level, 0.0 at bridge level
       const t = Math.max(0, Math.min(1, (src[i].y - bridgeY) / noseH))
 
-      out[i].x = noseCx + dx * (1 + width * 0.40 * t)
+      out[i].x = noseCx + dx * (1 + width * 0.50 * t)
     }
   }
 
