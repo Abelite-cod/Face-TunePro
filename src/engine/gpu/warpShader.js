@@ -13,7 +13,7 @@ precision mediump float;
 
 uniform sampler2D u_texture;
 
-#define POINT_COUNT 86
+#define POINT_COUNT 92
 
 uniform vec2 u_original[POINT_COUNT];
 uniform vec2 u_modified[POINT_COUNT];

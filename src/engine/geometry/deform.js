@@ -105,7 +105,9 @@ function eyeTransform(src, out, indices, size, width, height, tilt, distance, fa
 }
 
 /* =========================
-   NOSE — gradient-weighted, Facetune-style
+   NOSE — production-quality, Facetune-style
+   All operations read from `src` (original landmarks) to prevent
+   compound distortion when multiple controls are active simultaneously.
 ========================= */
 
 function applyNose(src, out, c) {
@@ -117,29 +119,28 @@ function applyNose(src, out, c) {
 
   if (!size && !width && !narrow && !lift && !tip) return
 
-  // Key anatomical landmarks
+  // ── Anatomical reference points ───────────────────────────────────────────
+  // All verified MediaPipe 468-point mesh indices
   const noseAll    = [1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6]
-  const noseTip    = [1, 2, 5, 4, 19, 94]
-  const noseBridge = [168, 197, 195, 6]
-  const nostrils   = [98, 327, 45, 275, 2, 5]
+  const noseTip    = [1, 2, 5, 4, 19, 94]          // very tip of nose
+  const nostrils   = [98, 327, 45, 275, 2, 5]       // nostril wings
+  // Bridge side landmarks — verified to exist in MediaPipe 468-point mesh
+  // and have actual horizontal offset from center axis
+  const bridgeSide = [193, 417, 122, 351]
 
-  // Bridge root = top of nose (landmark 168), tip = bottom (landmark 1)
-  const bridgeY = src[168].y
-  const tipY    = src[1].y
-  const noseH   = Math.abs(tipY - bridgeY) || 1
-
-  // Horizontal center axis of the nose
-  const noseCx = (src[98].x + src[327].x) / 2
+  // Structural measurements from original landmarks
+  const bridgeY = src[168].y                         // top of nose bridge
+  const tipY    = src[1].y                           // nose tip
+  const noseH   = Math.abs(tipY - bridgeY) || 1     // nose height in pixels
+  const noseCx  = (src[98].x + src[327].x) / 2     // horizontal center axis
 
   // ── SIZE ──────────────────────────────────────────────────────────────────
-  // Facetune-style: uniform radial scale from bridge root + proportional
-  // nostril spread. When the nose gets bigger, the nostrils also widen
-  // naturally (like a real nose does in 3D). When smaller, they narrow.
+  // Uniform radial scale from bridge root + proportional nostril spread.
+  // Reads from src throughout — no compound distortion.
   if (size) {
     const anchor = { x: noseCx, y: bridgeY }
     const scale  = 1 + size * 0.32
 
-    // 1. Scale all nose points radially from bridge root
     for (let i of noseAll) {
       const dx = src[i].x - anchor.x
       const dy = src[i].y - anchor.y
@@ -147,72 +148,65 @@ function applyNose(src, out, c) {
       out[i].y = anchor.y + dy * scale
     }
 
-    // 2. Extra horizontal spread on nostrils proportional to size
-    // (nostrils widen more than the bridge when nose gets bigger)
+    // Extra nostril spread — nostrils widen more than bridge (anatomically correct)
     for (let i of nostrils) {
       const t  = Math.max(0, Math.min(1, (src[i].y - bridgeY) / noseH))
-      const dx = out[i].x - noseCx   // use already-scaled position
-      out[i].x = noseCx + dx * (1 + size * 0.15 * t)
+      const dx = src[i].x - noseCx
+      // Apply on top of size-scaled position
+      out[i].x = noseCx + dx * scale * (1 + size * 0.15 * t)
     }
   }
 
   // ── WIDTH (nostrils) ──────────────────────────────────────────────────────
-  // Push nostrils outward/inward symmetrically from the center axis.
-  // Uses absolute horizontal distance so both positive and negative work equally.
-  // width > 0 = wider nostrils, width < 0 = narrower nostrils.
+  // Push nostril wings outward/inward from center axis.
+  // Always reads from src — independent of size control.
+  // width > 0 = wider, width < 0 = narrower.
   if (width) {
-    // Use the actual nostril wing landmarks (98=left nostril, 327=right nostril)
-    // as the reference points for the center of each side
-    const leftNostrilX  = src[98].x
-    const rightNostrilX = src[327].x
-    const cx = (leftNostrilX + rightNostrilX) / 2
-
+    const cx = noseCx
     for (let i of nostrils) {
       const dx = src[i].x - cx
-      // Shift each nostril point outward (positive) or inward (negative)
-      // proportional to its distance from center
       out[i].x = cx + dx * (1 + width * 0.90)
     }
   }
 
   // ── NARROW (bridge) ───────────────────────────────────────────────────────
-  // Compress or widen the upper nose bridge horizontally.
-  // Uses a wider set of landmarks that actually have horizontal spread.
+  // Compress/widen the nose bridge using side-of-nose landmarks.
+  // Always reads from src — independent of width control.
   // narrow > 0 = narrower bridge, narrow < 0 = wider bridge.
   if (narrow) {
-    // Include side-of-nose landmarks that have actual horizontal offset
-    const bridgeWide = [193, 417, 168, 197, 195, 6, 122, 351, 245, 465]
-      .filter(i => src[i])  // only use landmarks that exist
-
     const cx = noseCx
-
-    for (let i of bridgeWide) {
+    for (let i of bridgeSide) {
+      if (!src[i]) continue
       const dx = src[i].x - cx
       out[i].x = cx + dx * (1 - narrow * 0.70)
+    }
+    // Also compress the center bridge points slightly
+    for (let i of [168, 197, 195, 6]) {
+      const dx = src[i].x - cx
+      out[i].x = cx + dx * (1 - narrow * 0.25)
     }
   }
 
   // ── LIFT ──────────────────────────────────────────────────────────────────
   // Move the entire nose tip region up or down uniformly.
   // lift > 0 = tip moves up, lift < 0 = tip moves down.
-  // Flat shift — no gradient, so ALL tip points move equally and visibly.
+  // Flat shift applied to all tip points equally.
   if (lift) {
+    const shift = lift * 8.0
     for (let i of noseTip) {
-      out[i].y = src[i].y - lift * 8.0
+      out[i].y = src[i].y - shift
     }
   }
 
   // ── TIP ───────────────────────────────────────────────────────────────────
-  // tip > 0 (right) = tip points UP (more refined/upturned)
-  // tip > 0 (right) = tip moves UP (upturned/refined)
-  // tip < 0 (left)  = tip moves DOWN (drooping)
-  // Negative Y = up in screen coordinates, so negate tip for correct direction.
+  // Tilt the very tip of the nose up or down around a pivot.
+  // tip > 0 (right slider) = tip moves UP (upturned/refined)
+  // tip < 0 (left slider)  = tip moves DOWN (drooping)
   if (tip) {
     const pivotY = bridgeY + noseH * 0.6
     for (let i of [1, 2, 4, 5]) {
       const dy = src[i].y - pivotY
       if (dy > 0) {
-        // Negate tip so positive = up (smaller Y), negative = down (larger Y)
         out[i].y = src[i].y - tip * 3.5 * (dy / (noseH * 0.4))
       }
     }

@@ -96,7 +96,7 @@ function makeExportSmoother() {
  */
 function makeNoseSmoother() {
   // Nose landmark indices used in applyNose
-  const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6])
+  const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6, 193, 417, 122, 351])
   let prev = null
   const alpha = 0.92  // very heavy smoothing for nose only
 

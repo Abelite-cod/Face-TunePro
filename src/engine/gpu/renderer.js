@@ -111,8 +111,8 @@ export function renderFrame(gl, media, landmarks, modified, controls = {}) {
       33, 133, 160, 159, 158, 144, 145, 153,
       362, 263, 387, 386, 385, 373, 374, 380,
 
-      // NOSE (11)
-      1, 2, 98, 327, 168, 197, 195, 5, 4, 45, 275,
+      // NOSE (17) — must include ALL landmarks used in applyNose in deform.js
+      1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6, 193, 417, 122,
 
       // LIPS (18)
       61, 146, 91, 181, 84, 17, 314, 405, 321, 375,

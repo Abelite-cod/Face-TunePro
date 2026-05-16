@@ -7,8 +7,8 @@ let prevLandmarks     = null
 let prevNoseLandmarks = null
 let lastDetectTime    = 0
 
-// Nose landmark indices — must match applyNose in deform.js
-const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6])
+// Nose landmark indices — must match applyNose in deform.js + renderer.js
+const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6, 193, 417, 122, 351])
 
 /**
  * General temporal smoothing for all landmarks.
