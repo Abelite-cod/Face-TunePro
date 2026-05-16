@@ -211,6 +211,23 @@ function applyNose(src, out, c) {
       }
     }
   }
+
+  // ── DISPLACEMENT CLAMP ────────────────────────────────────────────────────
+  // Safety: no nose landmark can move more than 40% of nose height from its
+  // original position. Prevents breaking/tearing at extreme slider values.
+  const MAX_DISP = noseH * 0.40
+
+  for (let i of noseAll) {
+    const dxFinal = out[i].x - src[i].x
+    const dyFinal = out[i].y - src[i].y
+    const dist    = Math.sqrt(dxFinal * dxFinal + dyFinal * dyFinal)
+
+    if (dist > MAX_DISP) {
+      const scale = MAX_DISP / dist
+      out[i].x = src[i].x + dxFinal * scale
+      out[i].y = src[i].y + dyFinal * scale
+    }
+  }
 }
 
 /* =========================
