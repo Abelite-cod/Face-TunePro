@@ -32,7 +32,8 @@ export default function PreviewCanvas(){
   const startRef = useRef({x:0,y:0})
   const startValueRef = useRef(0)
 
-  const cancelledRef = useRef(false)
+  const cancelledRef    = useRef(false)
+  const cancelExportRef = useRef(false)  // signals the export loop to abort
   const recorderRef = useRef(null)
   const [recording, setRecording] = useState(false)
   const [progress, setProgress] = useState(0)
@@ -554,22 +555,26 @@ export default function PreviewCanvas(){
       // 🔥 HYBRID SWITCH — synchronous UA check, no async hanging
       const canUseWebCodecs = supportsH264Encoding()
 
+      // Reset cancel flag before starting
+      cancelExportRef.current = false
+
       if (canUseWebCodecs) {
         // ✅ WebCodecs path — Chrome/Firefox/Edge on Windows, Mac, Android
         recorderRef.current = recordCanvasVideo(canvas, media, {
           ...handlers,
           state,
+          cancelRef: cancelExportRef,
           onThumb: (dataUrl) => setExportThumb(dataUrl)
         })
       } else {
         // ✅ Frame-by-frame MediaRecorder path — Safari on Mac/iOS, older browsers
-        // Seeks frame-by-frame so output FPS matches source (no real-time lag)
         console.log("ℹ️ Using frame-by-frame MediaRecorder export")
 
         try {
           frameByFrameRecord(canvas, media, {
             ...handlers,
             state,
+            cancelRef: cancelExportRef,
             onThumb: (dataUrl) => setExportThumb(dataUrl)
           })
         } catch (e) {
@@ -1096,12 +1101,8 @@ export default function PreviewCanvas(){
               onClick={() => {
                 console.log("❌ CANCEL CLICKED")
 
-                cancelledRef.current = true
-
-                // 🛑 cancel export
-                if (recorderRef.current?.stop) {
-                  recorderRef.current.stop()
-                }
+                cancelledRef.current    = true
+                cancelExportRef.current = true  // signals export loop to stop
 
                 // 🛑 cancel loading
                 if (mediaLoading) {
@@ -1112,6 +1113,11 @@ export default function PreviewCanvas(){
                 if (exportStatus === "preparing") {
                   setExportStatus(null)
                 }
+
+                setRecording(false)
+                setProgress(0)
+                setExportThumb(null)
+                setTimeout(() => setExportStatus(null), 100)
               }}
               style={btnStyle}
             >

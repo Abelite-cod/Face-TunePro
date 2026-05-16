@@ -183,7 +183,8 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
     onStart    = () => {},
     onStop     = () => {},
     onThumb    = null,
-    state      = null
+    state      = null,
+    cancelRef  = null   // { current: false } — set to true to abort
   } = options
 
   const width  = canvas.width
@@ -243,6 +244,14 @@ export async function recordCanvasVideo(canvas, media, options = {}) {
   let cachedLandmarks  = null
 
   for (let frame = 0; frame < totalFrames; frame++) {
+
+    // Check cancel flag — exit loop immediately if user pressed Cancel
+    if (cancelRef?.current) {
+      console.log("🛑 Export cancelled at frame", frame)
+      if (releaseLock) releaseLock()
+      onStop()
+      return
+    }
 
     if (frame === 0 || frame % REDETECT_EVERY === 0) {
       try {
