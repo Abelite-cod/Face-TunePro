@@ -3,12 +3,16 @@ import { deform } from "../geometry/deform"
 import { renderFrame } from "../gpu/renderer"
 
 // Smoothing state — reset when media changes
-let prevLandmarks = null
-let lastDetectTime = 0
+let prevLandmarks     = null
+let prevNoseLandmarks = null
+let lastDetectTime    = 0
+
+// Nose landmark indices — must match applyNose in deform.js
+const NOSE_INDICES = new Set([1, 2, 5, 4, 19, 94, 45, 275, 98, 327, 168, 197, 195, 6])
 
 /**
- * Temporal smoothing: blends current detection with previous frame.
- * Eliminates jitter without adding lag.
+ * General temporal smoothing for all landmarks.
+ * alpha=0.75 — good balance of stability vs responsiveness.
  */
 function smoothLandmarks(current) {
   if (!prevLandmarks || prevLandmarks.length !== current.length) {
@@ -16,7 +20,7 @@ function smoothLandmarks(current) {
     return current
   }
 
-  const alpha = 0.75 // 0 = no smoothing, 1 = frozen
+  const alpha = 0.75
 
   const smoothed = current.map((p, i) => ({
     x: prevLandmarks[i].x * alpha + p.x * (1 - alpha),
@@ -25,6 +29,34 @@ function smoothLandmarks(current) {
 
   prevLandmarks = smoothed
   return smoothed
+}
+
+/**
+ * Extra smoothing applied ONLY to nose landmarks.
+ * The nose controls are now very sensitive (high multipliers), so even
+ * 1-2px jitter in the nose anchor causes visible oscillation.
+ * alpha=0.92 blends new detections in over ~12 frames — invisible transition.
+ */
+function smoothNoseLandmarks(current) {
+  if (!prevNoseLandmarks || prevNoseLandmarks.length !== current.length) {
+    prevNoseLandmarks = current.map(p => ({ x: p.x, y: p.y }))
+    return current
+  }
+
+  const alpha  = 0.92
+  const result = current.map((p, i) => {
+    if (!NOSE_INDICES.has(i)) return p
+    return {
+      x: prevNoseLandmarks[i].x * alpha + p.x * (1 - alpha),
+      y: prevNoseLandmarks[i].y * alpha + p.y * (1 - alpha)
+    }
+  })
+
+  for (let i of NOSE_INDICES) {
+    prevNoseLandmarks[i] = { x: result[i].x, y: result[i].y }
+  }
+
+  return result
 }
 
 export function runPipeline(media, canvas, state, comparingRef = null) {
@@ -66,6 +98,7 @@ export function runPipeline(media, canvas, state, comparingRef = null) {
 
     // Reset globals
     prevLandmarks        = null
+    prevNoseLandmarks    = null
     window.__landmarks   = null
     window.__lastDetect  = null
     window.__detecting   = false
@@ -102,6 +135,7 @@ export function runPipeline(media, canvas, state, comparingRef = null) {
       window.__landmarks  = null
       window.__lastMedia  = media
       prevLandmarks       = null
+      prevNoseLandmarks   = null
       window.__detecting  = false
     }
 
@@ -133,18 +167,21 @@ export function runPipeline(media, canvas, state, comparingRef = null) {
       return
     }
 
-    // ✅ Smooth BEFORE deform — eliminates jitter
+    // Step 1: general smoothing for all landmarks
     const smooth = smoothLandmarks(rawLandmarks)
 
-    // ✅ Single-pass deform — skip when user is holding Before/After compare
+    // Step 2: extra nose-only smoothing on top (prevents oscillation)
+    const noseStable = smoothNoseLandmarks(smooth)
+
+    // Step 3: deform (or skip if comparing)
     const isComparing = comparingRef?.current === true
-    const modified = isComparing ? smooth : deform(smooth, state)
+    const modified = isComparing ? noseStable : deform(noseStable, state)
 
     const enhanceControls = state.getAll("enhance") || {}
     const filterControls  = state.getAll("filter")  || {}
 
     try {
-      renderFrame(gl, media, smooth, modified, {
+      renderFrame(gl, media, noseStable, modified, {
         ...enhanceControls,
         ...filterControls
       })
